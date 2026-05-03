@@ -39,8 +39,8 @@
     hashedPasswordFile = config.sops.secrets.user_password.path;
     extraGroups = [ "networkmanager" "wheel" "docker" "libvirtd" "kvm" ];
     openssh.authorizedKeys.keyFiles = [
-      config.sops.secrets.ssh_public_key.path
-      config.sops.secrets.ssh_public_key_windows.path
+      ./keys/mac.pub
+      ./keys/windows.pub
     ];
   };
 
@@ -56,8 +56,6 @@
   sops.secrets.motherboard_uuid = {};
   sops.secrets.motherboard_serial = {};
   sops.secrets.tailscale_auth_key = {};
-  sops.secrets.ssh_public_key = {};
-  sops.secrets.ssh_public_key_windows = {};
   sops.secrets.immich_db_password = {};
   
   # Dynamically generate the Immich stack.env file natively from the Nix configuration
