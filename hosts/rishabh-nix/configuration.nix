@@ -96,7 +96,7 @@
   # Power Sync & ACPI (Host Shutdown triggered by Power Button)
   # ---------------------------------------------------------
   # Intercept the physical power button so logind doesn't immediately kill the host
-  services.logind.extraConfig = "HandlePowerKey=ignore";
+  services.logind.settings.Login.HandlePowerKey = "ignore";
   
   services.acpid = {
     enable = true;
