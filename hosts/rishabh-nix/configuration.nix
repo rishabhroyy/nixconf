@@ -83,6 +83,7 @@
     "nvidia-x11"
     "nvidia-settings"
     "nvidia-persistenced"
+    "nvidia-kernel-modules
   ];
 
   # Enable NVIDIA drivers for the host GPU (Quadro P620) to support CUDA in Docker
