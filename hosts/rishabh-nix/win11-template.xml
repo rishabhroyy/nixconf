@@ -1,7 +1,7 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11</name>
-  <memory unit='KiB'>16777216</memory>
-  <currentMemory unit='KiB'>16777216</currentMemory>
+  <memory unit='KiB'>25165824</memory>
+  <currentMemory unit='KiB'>25165824</currentMemory>
   <vcpu placement='static'>12</vcpu>
   <cputune>
     <vcpupin vcpu='0' cpuset='2'/>
@@ -138,6 +138,8 @@
       <driver name='qemu' type='raw' cache='none' io='native'/>
       <source dev='/dev/disk/by-id/ata-SanDisk_SSD_PLUS_1000GB_221306A0095A'/>
       <target dev='sdb' bus='sata'/>
+      <serial>221306A0095A</serial>
+      <model vendor='SanDisk'>SSD PLUS 1TB</model>
     </disk>
 
     <!-- USB Controller 1 Passthrough (Bus 001 - Peripherals) -->
