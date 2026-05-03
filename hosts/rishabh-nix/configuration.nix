@@ -181,7 +181,7 @@
     ethtool
     
     # System info
-    neofetch
+    fastfetch
     tree
     (pkgs.writeShellScriptBin "update-immich" ''
       echo "Pulling latest Immich images from GHCR..."
