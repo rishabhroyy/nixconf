@@ -2,6 +2,9 @@
   <name>win11</name>
   <memory unit='KiB'>25165824</memory>
   <currentMemory unit='KiB'>25165824</currentMemory>
+  <memoryBacking>
+    <hugepages/>
+  </memoryBacking>
   <vcpu placement='static'>12</vcpu>
   <cputune>
     <vcpupin vcpu='0' cpuset='2'/>
@@ -138,8 +141,9 @@
       <driver name='qemu' type='raw' cache='none' io='native'/>
       <source dev='/dev/disk/by-id/ata-SanDisk_SSD_PLUS_1000GB_221306A0095A'/>
       <target dev='sdb' bus='sata'/>
+      <!-- Use an alias so we can reference this disk in the QEMU command line below -->
+      <alias name='ua-gamedrive'/>
       <serial>221306A0095A</serial>
-      <model vendor='SanDisk'>SSD PLUS 1TB</model>
     </disk>
 
     <!-- USB Controller 1 Passthrough (Bus 001 - Peripherals) -->
@@ -181,5 +185,12 @@
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
   </devices>
+
+  <qemu:commandline>
+    <qemu:arg value='-set'/>
+    <qemu:arg value='device.ua-gamedrive.vendor=SanDisk'/>
+    <qemu:arg value='-set'/>
+    <qemu:arg value='device.ua-gamedrive.product=SSD PLUS 1TB'/>
+  </qemu:commandline>
 
 </domain>

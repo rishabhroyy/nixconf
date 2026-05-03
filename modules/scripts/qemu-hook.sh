@@ -8,10 +8,10 @@ OPERATION="$2"
 SUB_OPERATION="$3"
 
 if [ "$GUEST_NAME" == "win11" ]; then
-    if [ "$OPERATION" == "release" ] && [ "$SUB_OPERATION" == "end" ]; then
-        # The Windows 11 guest has completely shut down and released its resources.
+    if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
+        # The Windows 11 guest has stopped.
         # We initiate a shutdown of the NixOS host to keep them fully synced.
-        echo "Windows 11 guest shut down. Syncing power off to NixOS host." | systemd-cat -t qemu-hook
+        echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | systemd-cat -t qemu-hook
         systemctl poweroff
     fi
 fi

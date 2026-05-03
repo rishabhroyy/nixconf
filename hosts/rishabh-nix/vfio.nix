@@ -17,6 +17,8 @@ in
     "rcu_nocbs=2-7,10-15"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
+    "hugepagesz=2M"
+    "hugepages=12288"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
@@ -69,17 +71,20 @@ in
       chown root:root /var/lib/libvirt/qemu/6700xt.rom
       chmod 644 /var/lib/libvirt/qemu/6700xt.rom
 
-      # Substitute secrets into the XML template
-      if ! ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
-        export UUID=$(cat /run/secrets/motherboard_uuid)
-        export SERIAL=$(cat /run/secrets/motherboard_serial)
-        
-        # Substitute the $UUID and $SERIAL variables into the template and define it
-        ${pkgs.envsubst}/bin/envsubst < ${./win11-template.xml} > /tmp/win11-resolved.xml
-        ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
-        ${pkgs.libvirt}/bin/virsh autostart win11
-        rm /tmp/win11-resolved.xml
+      # Always redefine the VM to ensure XML template changes are applied
+      if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
+        echo "Updating existing win11 VM definition..."
+        ${pkgs.libvirt}/bin/virsh undefine win11 --nvram
       fi
+
+      export UUID=$(cat /run/secrets/motherboard_uuid)
+      export SERIAL=$(cat /run/secrets/motherboard_serial)
+      
+      # Substitute the $UUID and $SERIAL variables into the template and define it
+      ${pkgs.envsubst}/bin/envsubst < ${./win11-template.xml} > /tmp/win11-resolved.xml
+      ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
+      ${pkgs.libvirt}/bin/virsh autostart win11
+      rm /tmp/win11-resolved.xml
     '';
   };
 
