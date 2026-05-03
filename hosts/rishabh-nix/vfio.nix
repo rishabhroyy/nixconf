@@ -50,13 +50,18 @@ in
   systemd.services.define-win11-vm = {
     description = "Define Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" "sops-nix.service" ];
-    requires = [ "libvirtd.service" "sops-nix.service" ];
+    after = [ "libvirtd.service" ];
+    requires = [ "libvirtd.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
     };
     script = ''
+      # Wait for secrets to be decrypted by sops-nix
+      while [ ! -f /run/secrets/motherboard_uuid ]; do
+        echo "Waiting for motherboard_uuid secret..."
+        sleep 1
+      done
       # Copy the ROM from the local Nix repository to the libvirt directory so QEMU can read it
       # Placed in the qemu subfolder and chowned so AppArmor and the qemu user don't block it
       mkdir -p /var/lib/libvirt/qemu
