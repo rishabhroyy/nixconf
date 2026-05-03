@@ -155,11 +155,34 @@
   };
 
   environment.systemPackages = with pkgs; [
+    # Basic Utilities
     git
     vim
+    nano
+    wget
+    curl
+    rsync
+    screen
+    tmux
+    htop
     btop
+    
+    # Archives
+    zip
+    unzip
+    unrar
+    p7zip
+    
+    # Hardware & Network Debugging
     pciutils # lspci
     usbutils # lsusb
+    nettools # ifconfig
+    dnsutils # dig, nslookup
+    ethtool
+    
+    # System info
+    neofetch
+    tree
     (pkgs.writeShellScriptBin "update-immich" ''
       echo "Pulling latest Immich images from GHCR..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
