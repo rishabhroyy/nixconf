@@ -1,0 +1,124 @@
+{ config, pkgs, inputs, ... }:
+
+{
+  imports = [
+    # Include hardware-configuration if it was generated (we leave a placeholder or assume it's created by user)
+    ./hardware-configuration.nix
+    ./vfio.nix
+    ./containers.nix
+    ./samba-ntfs.nix
+  ];
+
+  # Bootloader (Systemd-boot as default for modern UEFI)
+  boot.loader.systemd-boot.enable = true;
+  boot.loader.efi.canTouchEfiVariables = true;
+
+  networking.hostName = "rishabh-nix";
+
+  # We are passing the 2.5G NIC natively to the VM via VFIO, so NixOS uses the 1G motherboard NIC.
+  # Enable global DHCP so NixOS automatically grabs an IP from your router on the 1G connection.
+  networking.useDHCP = true;
+
+  # Tailscale
+  services.tailscale.enable = true;
+  services.tailscale.authKeyFile = config.sops.secrets.tailscale_auth_key.path;
+
+  # Enable SSH
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "prohibit-password";
+      PasswordAuthentication = true; # Enabled to allow password SSH login
+    };
+  };
+
+  # User Configuration
+  users.users.rishabh = {
+    isNormalUser = true;
+    description = "Rishabh";
+    hashedPasswordFile = config.sops.secrets.user_password.path;
+    extraGroups = [ "networkmanager" "wheel" "docker" "libvirtd" "kvm" ];
+    openssh.authorizedKeys.keyFiles = [
+      config.sops.secrets.ssh_public_key.path
+      config.sops.secrets.ssh_public_key_windows.path
+    ];
+  };
+
+  # SOPS Secrets configuration
+  sops.defaultSopsFile = ./secrets.yaml;
+  sops.defaultSopsFormat = "yaml";
+  # Ensure sops can use an ssh key or age key
+  sops.age.keyFile = "/root/.config/sops/age/keys.txt";
+  # Fallback to ssh keys if age key isn't present
+  sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
+
+  # Explicitly declare the secrets to make them available at /run/secrets/
+  sops.secrets.motherboard_uuid = {};
+  sops.secrets.motherboard_serial = {};
+  sops.secrets.tailscale_auth_key = {};
+  sops.secrets.ssh_public_key = {};
+  sops.secrets.ssh_public_key_windows = {};
+  sops.secrets.immich_db_password = {};
+  
+  # Dynamically generate the Immich stack.env file natively from the Nix configuration
+  sops.templates."immich.env".content = ''
+    DB_PASSWORD=${config.sops.placeholder.immich_db_password}
+    DB_USERNAME=postgres
+    DB_DATABASE_NAME=immich
+    IMMICH_VERSION=release
+    TZ=America/Los_Angeles
+  '';
+
+  # Dynamically generate the Tailscale environment file for Docker sidecars
+  sops.templates."tailscale.env".content = ''
+    TS_AUTHKEY=${config.sops.placeholder.tailscale_auth_key}
+  '';
+
+  # User password needs to be decrypted earlier in the boot process
+  sops.secrets.user_password.neededForUsers = true;
+
+  # System state version
+  system.stateVersion = "24.05";
+
+  # Enable NVIDIA drivers for the host GPU (Quadro P620) to support CUDA in Docker
+  hardware.graphics.enable = true;
+  services.xserver.videoDrivers = [ "nvidia" ];
+  hardware.nvidia = {
+    modesetting.enable = true;
+    open = false; # P620 requires the closed-source driver
+    nvidiaSettings = false;
+  };
+  
+  # Enable NVIDIA Container Toolkit for Docker (--gpus=all)
+  hardware.nvidia-container-toolkit.enable = true;
+
+  # ---------------------------------------------------------
+  # Power Sync & ACPI (Host Shutdown triggered by Power Button)
+  # ---------------------------------------------------------
+  # Intercept the physical power button so logind doesn't immediately kill the host
+  services.logind.extraConfig = "HandlePowerKey=ignore";
+  
+  services.acpid = {
+    enable = true;
+    handlers = {
+      power = {
+        event = "button/power.*";
+        action = ''
+          # 1. Send ACPI shutdown signal to the Windows 11 VM
+          ${pkgs.libvirt}/bin/virsh shutdown win11
+          
+          # 2. Wait up to 120 seconds for the VM process to exit gracefully
+          for i in {1..120}; do
+            if ! ${pkgs.libvirt}/bin/virsh list | grep -q "win11"; then
+              break
+            fi
+            sleep 1
+          done
+          
+          # 3. Safely power off the NixOS host
+          /run/current-system/sw/bin/shutdown -h now
+        '';
+      };
+    };
+  };
+}

@@ -1,0 +1,183 @@
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  <name>win11</name>
+  <memory unit='KiB'>16777216</memory>
+  <currentMemory unit='KiB'>16777216</currentMemory>
+  <vcpu placement='static'>12</vcpu>
+  <cputune>
+    <vcpupin vcpu='0' cpuset='2'/>
+    <vcpupin vcpu='1' cpuset='10'/>
+    <vcpupin vcpu='2' cpuset='3'/>
+    <vcpupin vcpu='3' cpuset='11'/>
+    <vcpupin vcpu='4' cpuset='4'/>
+    <vcpupin vcpu='5' cpuset='12'/>
+    <vcpupin vcpu='6' cpuset='5'/>
+    <vcpupin vcpu='7' cpuset='13'/>
+    <vcpupin vcpu='8' cpuset='6'/>
+    <vcpupin vcpu='9' cpuset='14'/>
+    <vcpupin vcpu='10' cpuset='7'/>
+    <vcpupin vcpu='11' cpuset='15'/>
+  </cputune>
+  <os>
+    <type arch='x86_64' machine='pc-q35-8.2'>hvm</type>
+    <loader readonly='yes' type='pflash'>/run/libvirt/nix-ovmf/OVMF_CODE.fd</loader>
+    <nvram template='/run/libvirt/nix-ovmf/OVMF_VARS.fd'>/var/lib/libvirt/qemu/nvram/win11_VARS.fd</nvram>
+    <smbios mode='sysinfo'/>
+  </os>
+  <sysinfo type='smbios'>
+    <bios>
+      <entry name='vendor'>American Megatrends International, LLC.</entry>
+    </bios>
+    <system>
+      <entry name='manufacturer'>Micro-Star International Co., Ltd.</entry>
+      <entry name='product'>MS-7C37</entry>
+      <entry name='version'>1.0</entry>
+      <entry name='serial'>$SERIAL</entry>
+      <entry name='uuid'>$UUID</entry>
+    </system>
+    <baseBoard>
+      <entry name='manufacturer'>Micro-Star International Co., Ltd.</entry>
+      <entry name='product'>MPG X570 GAMING EDGE WIFI (MS-7C37)</entry>
+      <entry name='version'>1.0</entry>
+      <entry name='serial'>$SERIAL</entry>
+    </baseBoard>
+  </sysinfo>
+  <features>
+    <acpi/>
+    <apic/>
+    <hyperv mode='custom'>
+      <relaxed state='on'/>
+      <vapic state='on'/>
+      <spinlocks state='on' retries='8191'/>
+      <vpindex state='on'/>
+      <runtime state='on'/>
+      <synic state='on'/>
+      <stimer state='on'/>
+      <reset state='on'/>
+      <vendor_id state='on' value='GenuineIntel'/>
+      <frequencies state='on'/>
+      <reenlightenment state='on'/>
+      <tlbflush state='on'/>
+      <ipi state='on'/>
+      <evmcs state='off'/>
+    </hyperv>
+    <kvm>
+      <hidden state='on'/>
+    </kvm>
+    <ioapic driver='qemu'/>
+  </features>
+  <cpu mode='host-passthrough' check='none' migratable='on'>
+    <topology sockets='1' dies='1' cores='6' threads='2'/>
+    <cache mode='passthrough'/>
+    <feature policy='require' name='topoext'/>
+    <feature policy='disable' name='hypervisor'/>
+    <!-- Required for Hyper-V / VBS / Core Isolation in the guest -->
+    <feature policy='require' name='svm'/>
+    <!-- Helps bypass RDTSC timing checks used by Vanguard -->
+    <feature policy='require' name='invtsc'/>
+  </cpu>
+  <clock offset='localtime'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+    <timer name='hypervclock' present='yes'/>
+    <timer name='tsc' present='yes' mode='native'/>
+  </clock>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+  <devices>
+    <emulator>/run/current-system/sw/bin/qemu-system-x86_64</emulator>
+
+    <!-- Essential PCIe Root Ports for assigning devices to specific buses -->
+    <controller type='pci' index='1' model='pcie-root-port'/>
+    <controller type='pci' index='2' model='pcie-root-port'/>
+    <controller type='pci' index='3' model='pcie-root-port'/>
+    <controller type='pci' index='4' model='pcie-root-port'/>
+    <controller type='pci' index='5' model='pcie-root-port'/>
+    <controller type='pci' index='6' model='pcie-root-port'/>
+    <controller type='pci' index='7' model='pcie-root-port'/>
+    <controller type='pci' index='8' model='pcie-root-port'/>
+
+    <!-- RX 6700 XT GPU Passthrough -->
+    <!-- Mapped to 2f:00.0 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x2f' slot='0x00' function='0x0'/>
+      </source>
+      <rom file='/var/lib/libvirt/qemu/6700xt.rom'/>
+      <!-- Map to a PCIe root port in the VM (Multifunction for AMD Drivers) -->
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0' multifunction='on'/>
+    </hostdev>
+
+    <!-- RX 6700 XT Audio Passthrough -->
+    <!-- Mapped to 2f:00.1 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x2f' slot='0x00' function='0x1'/>
+      </source>
+      <!-- MUST be on the same bus and slot as the GPU (function 1) for AMD to recognize it properly -->
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
+    </hostdev>
+
+    <!-- NVMe Boot Drive Passthrough (Samsung 980 Pro) -->
+    <!-- Mapped to 02:00.0 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x02' slot='0x00' function='0x0'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
+      <boot order='1'/>
+    </hostdev>
+
+    <!-- 1TB SATA SSD Passthrough -->
+    <disk type='block' device='disk'>
+      <driver name='qemu' type='raw' cache='none' io='native'/>
+      <source dev='/dev/disk/by-id/ata-SanDisk_SSD_PLUS_1000GB_221306A0095A'/>
+      <target dev='sdb' bus='sata'/>
+    </disk>
+
+    <!-- USB Controller 1 Passthrough (Bus 001 - Peripherals) -->
+    <!-- Mapped to 2a:00.1 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x2a' slot='0x00' function='0x1'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
+    </hostdev>
+
+    <!-- USB Controller 2 Passthrough (Bus 003 - NZXT/Front Panel) -->
+    <!-- Mapped to 2a:00.3 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x2a' slot='0x00' function='0x3'/>
+      </source>
+      <!-- Map to an unused PCIe root port in the VM (e.g., bus 07) -->
+      <address type='pci' domain='0x0000' bus='0x07' slot='0x00' function='0x0'/>
+    </hostdev>
+
+    <!-- 2.5Gbe Realtek NIC Passthrough (10ec:8125) -->
+    <!-- Mapped to 29:00.0 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x29' slot='0x00' function='0x0'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
+    </hostdev>
+
+    <!-- CRITICAL ANTI-CHEAT: Disable QEMU/VirtIO Memory Balloon -->
+    <memballoon model='none'/>
+    
+    <!-- Explicitly disable default QEMU video/graphics to prevent basic VM detection -->
+    <video>
+      <model type='none'/>
+    </video>
+    <!-- Use physical USB passthrough, no emulated QEMU tablet -->
+    <input type='mouse' bus='ps2'/>
+    <input type='keyboard' bus='ps2'/>
+  </devices>
+
+</domain>

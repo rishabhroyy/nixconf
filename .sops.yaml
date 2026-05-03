@@ -1,0 +1,5 @@
+creation_rules:
+     - path_regex: hosts/rishabh-nix/secrets.yaml$
+       key_groups:
+       - age:
+         - "age1y6xdrp7rc4f8vzggtftkfxsmmv03lqqfppasztxym2ju34f934sq2838zz" # Replace with your public key
