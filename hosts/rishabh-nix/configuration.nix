@@ -170,7 +170,6 @@
     # Archives
     zip
     unzip
-    unrar
     p7zip
     
     # Hardware & Network Debugging
