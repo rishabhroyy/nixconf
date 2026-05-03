@@ -95,7 +95,7 @@
     modesetting.enable = true;
     open = false; # P620 requires the closed-source driver
     nvidiaSettings = false;
-    package = config.boot.kernelPackages.nvidiaPackages.stable;
+    package = config.boot.kernelPackages.nvidiaPackages.legacy_580;
   };
   
   # Enable NVIDIA Container Toolkit for Docker (--gpus=all)
