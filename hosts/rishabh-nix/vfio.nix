@@ -42,12 +42,29 @@ in
   };
 
   # Hook for VM-to-Host Power Sync
-  system.activationScripts.libvirt-hooks.text = ''
+  system.activationScripts.libvirt-hooks.text = let
+    hookScript = pkgs.writeShellScript "qemu-hook" ''
+      GUEST_NAME="$1"
+      OPERATION="$2"
+      SUB_OPERATION="$3"
+
+      if [ "$GUEST_NAME" == "win11" ]; then
+          # Log the event for debugging
+          echo "$(date): win11 $OPERATION $SUB_OPERATION" >> /tmp/qemu-hook.log
+          
+          if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
+              # The Windows 11 guest has stopped.
+              echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
+              ${pkgs.systemd}/bin/systemctl poweroff
+          fi
+      fi
+    '';
+  in ''
     mkdir -p /etc/libvirt/hooks /var/lib/libvirt/hooks
     
     # Place in both /etc and /var paths to ensure libvirt picks it up
-    cp -f ${../../modules/scripts/qemu-hook.sh} /etc/libvirt/hooks/qemu
-    cp -f ${../../modules/scripts/qemu-hook.sh} /var/lib/libvirt/hooks/qemu
+    cp -f ${hookScript} /etc/libvirt/hooks/qemu
+    cp -f ${hookScript} /var/lib/libvirt/hooks/qemu
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
   '';
