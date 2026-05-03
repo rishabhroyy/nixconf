@@ -50,8 +50,8 @@ in
   systemd.services.define-win11-vm = {
     description = "Define Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" ];
-    requires = [ "libvirtd.service" ];
+    after = [ "libvirtd.service" "sops-nix.service" ];
+    requires = [ "libvirtd.service" "sops-nix.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;

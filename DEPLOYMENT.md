@@ -77,14 +77,14 @@ We use `sops-nix` to securely store these values. You can do this on your Mac us
    ```bash
    nixos-install --flake /mnt/etc/nixos/nixconf#rishabh-nix
    ```
-9. **Set your Samba Password:** Before rebooting, `chroot` into the system to set your SMB password (which Windows will use to access the drives):
+9. **Reboot:** You are done with the live USB!
    ```bash
-   nixos-enter --root /mnt
-   smbpasswd -a rishabh
-   exit
+   reboot
    ```
-10. Reboot!
-
+10. **Set your Samba Password:** Once your new NixOS system has booted up and you log in, open a terminal and set your SMB password (which Windows will use to access the drives):
+   ```bash
+   sudo smbpasswd -a rishabh
+   ```
 ---
 
 ## Phase 2: VM Network Bootstrapping

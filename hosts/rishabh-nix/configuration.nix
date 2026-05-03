@@ -8,6 +8,8 @@
     ./containers.nix
     ./samba-ntfs.nix
   ];
+  
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # Bootloader (Systemd-boot as default for modern UEFI)
   boot.loader.systemd-boot.enable = true;
@@ -93,6 +95,7 @@
     modesetting.enable = true;
     open = false; # P620 requires the closed-source driver
     nvidiaSettings = false;
+    package = config.boot.kernelPackages.nvidiaPackages.stable;
   };
   
   # Enable NVIDIA Container Toolkit for Docker (--gpus=all)
@@ -151,7 +154,12 @@
     randomizedDelaySec = "45min";
   };
 
-  environment.systemPackages = [
+  environment.systemPackages = with pkgs; [
+    git
+    vim
+    btop
+    pciutils # lspci
+    usbutils # lsusb
     (pkgs.writeShellScriptBin "update-immich" ''
       echo "Pulling latest Immich images from GHCR..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
