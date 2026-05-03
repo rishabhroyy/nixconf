@@ -61,7 +61,7 @@ in
       # Placed in the qemu subfolder and chowned so AppArmor and the qemu user don't block it
       mkdir -p /var/lib/libvirt/qemu
       cp ${./6700xt.rom} /var/lib/libvirt/qemu/6700xt.rom
-      chown qemu:qemu /var/lib/libvirt/qemu/6700xt.rom
+      chown root:root /var/lib/libvirt/qemu/6700xt.rom
       chmod 644 /var/lib/libvirt/qemu/6700xt.rom
 
       # Substitute secrets into the XML template
