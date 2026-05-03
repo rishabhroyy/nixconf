@@ -43,9 +43,13 @@ in
 
   # Hook for VM-to-Host Power Sync
   system.activationScripts.libvirt-hooks.text = ''
-    mkdir -p /etc/libvirt/hooks
-    cp ${../../modules/scripts/qemu-hook.sh} /etc/libvirt/hooks/qemu
-    chmod +x /etc/libvirt/hooks/qemu
+    mkdir -p /etc/libvirt/hooks /var/lib/libvirt/hooks
+    
+    # Place in both /etc and /var paths to ensure libvirt picks it up
+    cp -f ${../../modules/scripts/qemu-hook.sh} /etc/libvirt/hooks/qemu
+    cp -f ${../../modules/scripts/qemu-hook.sh} /var/lib/libvirt/hooks/qemu
+    
+    chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
   '';
 
   # Systemd service to define the VM from the template XML automatically
