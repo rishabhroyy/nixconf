@@ -80,6 +80,13 @@
   # System state version
   system.stateVersion = "24.05";
 
+  # Allow unfree packages specifically for NVIDIA drivers
+  nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [
+    "nvidia-x11"
+    "nvidia-settings"
+    "nvidia-persistenced"
+  ];
+
   # Enable NVIDIA drivers for the host GPU (Quadro P620) to support CUDA in Docker
   hardware.graphics.enable = true;
   services.xserver.videoDrivers = [ "nvidia" ];
