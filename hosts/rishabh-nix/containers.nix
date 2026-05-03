@@ -36,6 +36,7 @@
       extraOptions = [
         "--network=container:tailscale-immich"
       ];
+      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       # Automatically loaded via SOPS Templates from configuration.nix
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
@@ -53,6 +54,7 @@
         "--network=container:tailscale-immich"
         "--gpus=all" # Hardware acceleration using your K620
       ];
+      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
         "/var/lib/immich/model-cache:/cache"
@@ -65,6 +67,7 @@
       extraOptions = [
         "--network=container:tailscale-immich"
       ];
+      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
     };
 
     immich-database = {
@@ -73,6 +76,7 @@
       extraOptions = [
         "--network=container:tailscale-immich"
       ];
+      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       environmentFiles = [ config.sops.templates."immich.env".path ];
       environment = {
         POSTGRES_INITDB_ARGS = "--data-checksums";
@@ -89,6 +93,7 @@
       extraOptions = [
         "--network=container:tailscale-immich"
       ];
+      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       # Elegantly proxies port 80 to 2283 so you don't have to type the port number
       cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":2283" ];
     };
@@ -183,6 +188,21 @@
         "--network=container:tailscale-portainer"
       ];
       cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":9000" ];
+    };
+
+    # ---------------------------------------------------------
+    # Watchtower (Automatic Docker Image Updates)
+    # ---------------------------------------------------------
+    watchtower = {
+      image = "containrrr/watchtower:latest";
+      volumes = [
+        "/var/run/docker.sock:/var/run/docker.sock"
+      ];
+      environment = {
+        WATCHTOWER_CLEANUP = "true";
+        WATCHTOWER_POLL_INTERVAL = "86400"; # Check every 24 hours
+        WATCHTOWER_INCLUDE_RESTARTING = "true";
+      };
     };
   };
 }

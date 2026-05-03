@@ -121,4 +121,28 @@
       };
     };
   };
+
+  # ---------------------------------------------------------
+  # System Auto-Update & Maintenance
+  # ---------------------------------------------------------
+  system.autoUpgrade = {
+    enable = true;
+    flake = "github:rishabhroyy/nixconf";
+    allowReboot = false; # Never randomly restart the host
+    dates = "04:00";
+    randomizedDelaySec = "45min";
+  };
+
+  environment.systemPackages = [
+    (pkgs.writeShellScriptBin "update-immich" ''
+      echo "Pulling latest Immich images from GHCR..."
+      ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
+      ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
+      
+      echo "Restarting Immich containers to apply updates..."
+      systemctl restart docker-immich-server.service docker-immich-machine-learning.service
+      
+      echo "Immich update complete!"
+    '')
+  ];
 }
