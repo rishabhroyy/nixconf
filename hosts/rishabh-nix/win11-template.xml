@@ -136,15 +136,16 @@
       <boot order='1'/>
     </hostdev>
 
-    <!-- 1TB SATA SSD Passthrough -->
-    <disk type='block' device='disk'>
-      <driver name='qemu' type='raw' cache='none' io='native'/>
-      <source dev='/dev/disk/by-id/ata-SanDisk_SSD_PLUS_1000GB_221306A0095A'/>
-      <target dev='sdb' bus='sata'/>
-      <!-- Use an alias so we can reference this disk in the QEMU command line below -->
-      <alias name='ua-gamedrive'/>
-      <serial>221306A0095A</serial>
-    </disk>
+    <!-- Physical SATA Controller Passthrough (ASMedia 1061/1062) -->
+    <!-- This gives Windows 11 NATIVE access to the 1TB SanDisk SSD with no QEMU branding -->
+    <!-- Mapped to 26:00.0 -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x26' slot='0x00' function='0x0'/>
+      </source>
+      <!-- Map to a PCIe root port in the VM (bus 08) -->
+      <address type='pci' domain='0x0000' bus='0x08' slot='0x00' function='0x0'/>
+    </hostdev>
 
     <!-- USB Controller 1 Passthrough (Bus 001 - Peripherals) -->
     <!-- Mapped to 2a:00.1 -->
@@ -185,12 +186,5 @@
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
   </devices>
-
-  <qemu:commandline>
-    <qemu:arg value='-set'/>
-    <qemu:arg value='device.ua-gamedrive.vendor=SanDisk'/>
-    <qemu:arg value='-set'/>
-    <qemu:arg value='device.ua-gamedrive.product=SSD PLUS 1TB'/>
-  </qemu:commandline>
 
 </domain>

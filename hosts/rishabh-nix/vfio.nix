@@ -4,7 +4,7 @@ let
   # The devices we want to pass through to the Windows 11 VM
   # RX 6700 XT (1002:73df), Samsung 980 Pro NVMe (144d:a80a), and Realtek 2.5Gbe NIC (10ec:8125)
   # NOTE: We intentionally EXCLUDE the USB controller (1022:149c) here because there are TWO of them!
-  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" ];
+  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
