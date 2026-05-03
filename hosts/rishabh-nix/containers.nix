@@ -8,12 +8,6 @@
   # Enable NVIDIA Container Toolkit for P620 Passthrough
   hardware.nvidia-container-toolkit.enable = true;
 
-  # Ensure Tailscale state directories exist with correct permissions
-  system.activationScripts.docker-tailscale-prep.text = ''
-    mkdir -p /var/lib/tailscale-immich /var/lib/tailscale-seanime /var/lib/tailscale-portainer
-    chmod 700 /var/lib/tailscale-immich /var/lib/tailscale-seanime /var/lib/tailscale-portainer
-  '';
-
   # Tailscale Sidecars and Services
   virtualisation.oci-containers.containers = {
     # ---------------------------------------------------------
@@ -101,8 +95,7 @@
       ];
       labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       # Elegantly proxies port 80 to 2283 so you don't have to type the port number
-      cmd = [ "reverse-proxy" "--from" ":80" "--to" ":2283" ];
-      user = "0:0";
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":2283" ];
     };
 
     # ---------------------------------------------------------
@@ -153,8 +146,7 @@
       extraOptions = [
         "--network=container:tailscale-seanime"
       ];
-      cmd = [ "reverse-proxy" "--from" ":80" "--to" ":43211" ];
-      user = "0:0";
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":43211" ];
     };
 
     # ---------------------------------------------------------
@@ -195,8 +187,7 @@
       extraOptions = [
         "--network=container:tailscale-portainer"
       ];
-      cmd = [ "reverse-proxy" "--from" ":80" "--to" ":9000" ];
-      user = "0:0";
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":9000" ];
     };
 
     # ---------------------------------------------------------
@@ -209,11 +200,9 @@
       ];
       environment = {
         WATCHTOWER_CLEANUP = "true";
-        WATCHTOWER_POLL_INTERVAL = "3600"; # Check every hour for testing
+        WATCHTOWER_POLL_INTERVAL = "86400"; # Check every 24 hours
         WATCHTOWER_INCLUDE_RESTARTING = "true";
-        WATCHTOWER_DEBUG = "true";
       };
-      user = "0:0";
     };
   };
 }
