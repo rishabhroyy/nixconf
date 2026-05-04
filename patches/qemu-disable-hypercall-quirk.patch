@@ -1,22 +1,13 @@
 --- a/target/i386/kvm/kvm.c
 +++ b/target/i386/kvm/kvm.c
-@@ -3343,6 +3343,18 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+@@ -3609,6 +3609,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
          }
      }
  
-+    /* Disable hypercall quirk to prevent anti-cheat VMCALL/VMMCALL detection.
-+     * Define fallbacks in case QEMU's bundled headers predate these constants
-+     * (KVM_CAP_DISABLE_QUIRKS2 added in Linux 5.16, value=213). */
-+#ifndef KVM_CAP_DISABLE_QUIRKS2
-+#define KVM_CAP_DISABLE_QUIRKS2 213
-+#endif
-+#ifndef KVM_X86_QUIRK_FIX_HYPERCALL_INSN
-+#define KVM_X86_QUIRK_FIX_HYPERCALL_INSN (1 << 4)
-+#endif
-+    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0,
-+                          KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
++    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
 +        warn_report("kvm: failed to disable hypercall quirk");
 +    }
 +
+     first = false;
      return 0;
  }
