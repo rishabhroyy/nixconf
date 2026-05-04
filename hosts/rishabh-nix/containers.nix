@@ -86,12 +86,12 @@
 
     immich-proxy = {
       image = "caddy:alpine";
-      dependsOn = [ "tailscale-immich" "immich-server" ];
+      dependsOn = [ "tailscale-immich" ];
       extraOptions = [
         "--network=container:tailscale-immich"
       ];
       # Elegantly proxies port 80 to 2283 so you don't have to type the port number
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":2283" ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:2283" ];
     };
 
     # ---------------------------------------------------------
@@ -137,11 +137,11 @@
 
     seanime-proxy = {
       image = "caddy:alpine";
-      dependsOn = [ "tailscale-seanime" "seanime" ];
+      dependsOn = [ "tailscale-seanime" ];
       extraOptions = [
         "--network=container:tailscale-seanime"
       ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":43211" ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:43211" ];
     };
 
     # ---------------------------------------------------------
@@ -178,11 +178,11 @@
 
     portainer-proxy = {
       image = "caddy:alpine";
-      dependsOn = [ "tailscale-portainer" "portainer" ];
+      dependsOn = [ "tailscale-portainer" ];
       extraOptions = [
         "--network=container:tailscale-portainer"
       ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" ":9000" ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:9000" ];
     };
 
   };
