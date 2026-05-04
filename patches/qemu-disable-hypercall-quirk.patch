@@ -1,6 +1,6 @@
 --- a/target/i386/kvm/kvm.c
 +++ b/target/i386/kvm/kvm.c
-@@ -3609,6 +3609,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+@@ -3348,5 +3348,9 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
          }
      }
  
@@ -8,6 +8,5 @@
 +        warn_report("kvm: failed to disable hypercall quirk");
 +    }
 +
-     first = false;
      return 0;
  }
