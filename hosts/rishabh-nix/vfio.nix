@@ -22,6 +22,9 @@ in
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
+  # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation)
+  boot.extraModprobeConfig = "options kvm_amd nested=1";
+
   # Load VFIO modules
   boot.initrd.kernelModules = [
     "vfio_pci"

@@ -77,6 +77,7 @@
     <feature policy='require' name='svm'/>
     <!-- Helps bypass RDTSC timing checks used by Vanguard -->
     <feature policy='require' name='invtsc'/>
+    <host-phys-bits mode='passthrough'/>
   </cpu>
   <clock offset='localtime'>
     <timer name='rtc' tickpolicy='catchup'/>
