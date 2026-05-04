@@ -84,3 +84,5 @@ module_exit(kvm_hypercall_patch_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pantae");
 MODULE_DESCRIPTION("Patch hypercall (vmmcall or vmcall) to raise UD");
+/* Ensure kvm module is loaded first so kvm_queue_exception is in kallsyms */
+MODULE_SOFTDEP("pre: kvm");
