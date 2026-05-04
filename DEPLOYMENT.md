@@ -130,3 +130,30 @@ Open Device Manager. Ensure there are **NO** devices with the following names:
 2. Reboot the VM as requested by Vanguard.
 3. Launch Valorant. Run a standard Deathmatch.
 4. If you complete the Deathmatch without an "Error VAN9001" or "VAN152", the stealth configuration has successfully bypassed the KVM heuristic checks!
+
+## Phase 4: Network Storage & Performance
+
+### 1. Connecting to the Samba Share (DATA4)
+Since the 4TB HDD is managed by Linux, you need to map it as a network drive in Windows for high-performance access to your media and games.
+
+1.  **Set Samba Password**: On the NixOS host, you must set a password for the Samba user if you haven't already:
+    ```bash
+    sudo smbpasswd -a rishabh
+    ```
+2.  **Map Network Drive**: Inside the Windows 11 VM:
+    -   Open **File Explorer**.
+    -   Right-click **This PC** -> **Map network drive...**
+    -   **Folder**: `\\rishabh-nix\data4`
+    -   Ensure **Reconnect at sign-in** is checked.
+    -   Check **Connect using different credentials**.
+    -   Click **Finish**.
+3.  **Authentication**: Enter your Linux username (`rishabh`) and the Samba password you just created.
+
+> [!TIP]
+> If the NetBIOS name `rishabh-nix` does not resolve, use the host's Tailscale IP or the bridge IP (e.g., `\\192.168.x.y\data4`).
+
+### 2. High-Performance Tuning
+The Samba configuration in `samba-ntfs.nix` is optimized for gaming and low-latency access. 
+- **SMB Multi-channel**: Enabled for increased throughput.
+- **Async I/O (AIO)**: Configured to handle large game assets efficiently.
+- **NTFS3**: Uses the modern Linux kernel driver for near-native read/write speeds.

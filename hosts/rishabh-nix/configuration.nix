@@ -225,4 +225,10 @@
       echo "All containers updated and restarted!"
     '')
   ];
+
+  environment.shellAliases = {
+    update-containers = "sudo /run/current-system/sw/bin/update-containers";
+    disable-power-sync = "sudo touch /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync disabled.'";
+    enable-power-sync = "sudo rm -f /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync enabled.'";
+  };
 }
