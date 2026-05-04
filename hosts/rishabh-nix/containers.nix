@@ -51,7 +51,7 @@
       dependsOn = [ "tailscale-immich" ];
       extraOptions = [
         "--network=container:tailscale-immich"
-        "--gpus=all" # Hardware acceleration using your K620
+        "--runtime=nvidia" # Use explicit runtime to avoid AMD CDI discovery issues
       ];
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
@@ -121,7 +121,7 @@
       dependsOn = [ "tailscale-seanime" ];
       extraOptions = [
         "--network=container:tailscale-seanime"
-        "--gpus=all"
+        "--runtime=nvidia"
         "--group-add=video"
       ];
       environment = {
