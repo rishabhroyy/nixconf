@@ -65,6 +65,8 @@
     DB_PASSWORD=${config.sops.placeholder.immich_db_password}
     DB_USERNAME=postgres
     DB_DATABASE_NAME=immich
+    DB_HOSTNAME=127.0.0.1
+    REDIS_HOSTNAME=127.0.0.1
     IMMICH_VERSION=release
     TZ=America/Los_Angeles
   '';
