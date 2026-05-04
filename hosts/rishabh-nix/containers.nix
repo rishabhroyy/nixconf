@@ -51,8 +51,11 @@
       dependsOn = [ "tailscale-immich" ];
       extraOptions = [
         "--network=container:tailscale-immich"
-        "--runtime=nvidia" # Use explicit runtime to avoid AMD CDI discovery issues
       ];
+      environment = {
+        NVIDIA_VISIBLE_DEVICES = "all";
+        NVIDIA_DRIVER_CAPABILITIES = "all";
+      };
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
         "/var/lib/immich/model-cache:/cache"
@@ -121,7 +124,6 @@
       dependsOn = [ "tailscale-seanime" ];
       extraOptions = [
         "--network=container:tailscale-seanime"
-        "--runtime=nvidia"
         "--group-add=video"
       ];
       environment = {
