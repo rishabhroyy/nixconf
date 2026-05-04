@@ -7,12 +7,26 @@
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, sops-nix, ... }@inputs: {
+  outputs = { self, nixpkgs, sops-nix, ... }@inputs:
+  let
+    # Overlay to patch QEMU with the vmcall/hypercall quirk fix.
+    # This prevents anti-cheats (Genshin, Vanguard) from detecting the VMCALL
+    # instruction rewriting quirk and triggering a BSOD.
+    qemuPatchedOverlay = final: prev: {
+      qemu_kvm = prev.qemu_kvm.overrideAttrs (old: {
+        patches = (old.patches or []) ++ [
+          ./patches/qemu-disable-hypercall-quirk.patch
+        ];
+      });
+    };
+  in
+  {
     nixosConfigurations = {
       rishabh-nix = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         specialArgs = { inherit inputs; };
         modules = [
+          { nixpkgs.overlays = [ qemuPatchedOverlay ]; }
           sops-nix.nixosModules.sops
           ./hosts/rishabh-nix/configuration.nix
         ];

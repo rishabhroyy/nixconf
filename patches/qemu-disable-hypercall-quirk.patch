@@ -1,0 +1,14 @@
+diff -ru qemu/target/i386/kvm/kvm.c qemu-patched/target/i386/kvm/kvm.c
+--- qemu/target/i386/kvm/kvm.c
++++ qemu-patched/target/i386/kvm/kvm.c
+@@ -3609,6 +3609,10 @@
+         }
+     }
+ 
++    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
++        warn_report("kvm: failed to disable hypercall quirk");
++    }
++
+     first = false;
+     return 0;
+ }
