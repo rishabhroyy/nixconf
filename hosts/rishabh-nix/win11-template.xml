@@ -73,8 +73,12 @@
     <cache mode='passthrough'/>
     <feature policy='require' name='topoext'/>
     <feature policy='disable' name='hypervisor'/>
-    <!-- Required for Hyper-V / VBS / Core Isolation in the guest -->
-    <feature policy='require' name='svm'/>
+    <!-- SVM disabled: prevents VBS/Credential Guard from running inside the VM.
+         VBS locks kernel memory that mhyprot2 (Genshin anti-cheat) scans, causing
+         illegal memory access BSODs. Hyper-V enlightenments above still work for
+         performance. Trade-off: WSL2 and nested VMs will not work.
+         Re-enable if Genshin works without it or if WSL2/Docker is needed. -->
+    <!-- <feature policy='require' name='svm'/> -->
     <!-- Helps bypass RDTSC timing checks used by Vanguard -->
     <feature policy='require' name='invtsc'/>
     <host-phys-bits mode='passthrough'/>
