@@ -40,7 +40,6 @@
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
         "/home/rishabh/immich/photos:/usr/src/app/upload"
-        "/etc/localtime:/etc/localtime:ro"
         "/mnt/data4/Photos/Photos/iPhone_Photos:/usr/src/app/external/iphone_photoprism_backup"
         "/mnt/data4/Photos/cameras:/usr/src/app/external/camera_ssd"
       ];
