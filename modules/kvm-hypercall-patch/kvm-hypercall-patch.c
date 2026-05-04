@@ -48,17 +48,16 @@ static int __init init(void) {
     return 0;
 }
 
-static void __exit exit(void) {
+static void __exit kvm_hypercall_patch_exit(void) {
     printk(KERN_INFO "Unregistering hypercall ud hook\n");
     unregister_ftrace_function(&hypercall_ops);
     ftrace_set_filter_ip(&hypercall_ops, hypercall_addr, 1, 0);
 }
 
 module_init(init);
-module_exit(exit);
+module_exit(kvm_hypercall_patch_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_IMPORT_NS("KVM_AMD");
-MODULE_IMPORT_NS("KVM_INTEL");
+MODULE_IMPORT_NS("KVM");
 MODULE_AUTHOR("Pantae");
 MODULE_DESCRIPTION("Patch hypercall (vmmcall or vmcall) to raise UD");
