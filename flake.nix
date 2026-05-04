@@ -41,28 +41,39 @@ inject = """
 
 """
 
-# Find kvm_arch_init and its final "return 0;" before closing brace
+# Find kvm_arch_init's body and insert before its closing "return 0;\n}"
 func_start = content.find("int kvm_arch_init(")
 if func_start == -1:
     print("ERROR: kvm_arch_init not found", file=sys.stderr)
     sys.exit(1)
 
-# Find the last "    return 0;" within the function
-search_from = func_start
-last_return = -1
-pos = search_from
-while True:
-    idx = content.find("    return 0;\n}", pos)
-    if idx == -1:
-        break
-    last_return = idx
-    pos = idx + 1
+# Find the end of kvm_arch_init by tracking brace depth from the opening {
+brace_start = content.find("{", func_start)
+depth = 0
+func_end = -1
+for i in range(brace_start, len(content)):
+    if content[i] == '{':
+        depth += 1
+    elif content[i] == '}':
+        depth -= 1
+        if depth == 0:
+            func_end = i
+            break
 
-if last_return == -1:
-    print("ERROR: Could not find insertion point in kvm_arch_init", file=sys.stderr)
+if func_end == -1:
+    print("ERROR: Could not find end of kvm_arch_init", file=sys.stderr)
     sys.exit(1)
 
-content = content[:last_return] + inject + content[last_return:]
+# Now find "    return 0;" within the function bounds only
+func_body = content[func_start:func_end]
+ret_idx = func_body.rfind("    return 0;")
+if ret_idx == -1:
+    print("ERROR: Could not find 'return 0;' in kvm_arch_init", file=sys.stderr)
+    sys.exit(1)
+
+insert_pos = func_start + ret_idx
+
+content = content[:insert_pos] + inject + content[insert_pos:]
 
 with open(path, "w") as f:
     f.write(content)
