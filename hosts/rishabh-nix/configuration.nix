@@ -191,6 +191,7 @@
     nettools # ifconfig
     dnsutils # dig, nslookup
     ethtool
+    binutils # strings, objdump, etc.
     
     # System info
     fastfetch
