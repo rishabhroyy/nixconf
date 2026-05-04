@@ -144,6 +144,17 @@
   '';
 
   # ---------------------------------------------------------
+  # Container Storage & Permissions
+  # ---------------------------------------------------------
+  systemd.tmpfiles.rules = [
+    "d /var/lib/seanime 0755 1001 1001 -"
+    "d /var/lib/tailscale-immich 0755 root root -"
+    "d /var/lib/tailscale-seanime 0755 root root -"
+    "d /var/lib/tailscale-portainer 0755 root root -"
+    "d /var/lib/immich 0755 1000 1000 -"
+  ];
+
+  # ---------------------------------------------------------
   # System Auto-Update & Maintenance
   # ---------------------------------------------------------
   system.autoUpgrade = {
