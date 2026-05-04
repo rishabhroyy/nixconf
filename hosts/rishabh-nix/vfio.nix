@@ -53,9 +53,13 @@ in
           echo "$(date): win11 $OPERATION $SUB_OPERATION" >> /tmp/qemu-hook.log
           
           if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
-              # The Windows 11 guest has stopped.
-              echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
-              ${pkgs.systemd}/bin/systemctl poweroff
+              # Only power off if the lock file does NOT exist
+              if [ ! -f /var/lib/libvirt/hooks/no-power-sync ]; then
+                  echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
+                  ${pkgs.systemd}/bin/systemctl poweroff
+              else
+                  echo "Windows 11 guest $OPERATION. Power sync suppressed by /var/lib/libvirt/hooks/no-power-sync" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
+              fi
           fi
       fi
     '';
