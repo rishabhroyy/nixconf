@@ -12,12 +12,17 @@
     # Overlay to patch QEMU with the vmcall/hypercall quirk fix.
     # This prevents anti-cheats (Genshin, Vanguard) from detecting the VMCALL
     # instruction rewriting quirk and triggering a BSOD.
-    qemuPatchedOverlay = final: prev: {
-      qemu_kvm = prev.qemu_kvm.overrideAttrs (old: {
-        patches = (old.patches or []) ++ [
-          ./patches/qemu-disable-hypercall-quirk.patch
-        ];
+    qemuPatchedOverlay = final: prev:
+    let
+      hypercallPatch = ./patches/qemu-disable-hypercall-quirk.patch;
+      applyPatch = pkg: pkg.overrideAttrs (old: {
+        patches = (old.patches or []) ++ [ hypercallPatch ];
       });
+    in {
+      # Patches qemu_kvm (used by libvirtd for the VM)
+      qemu_kvm = applyPatch prev.qemu_kvm;
+      # Patches qemu (full) which provides qemu-system-x86_64 in the system PATH
+      qemu = applyPatch prev.qemu;
     };
   in
   {
