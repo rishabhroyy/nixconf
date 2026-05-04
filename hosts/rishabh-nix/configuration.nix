@@ -230,5 +230,6 @@
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
     disable-power-sync = "sudo touch /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync disabled.'";
     enable-power-sync = "sudo rm -f /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync enabled.'";
+    nix-deploy = "cd /etc/nixos/nixconf && sudo git pull && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
   };
 }
