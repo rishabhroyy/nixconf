@@ -182,15 +182,36 @@
     # System info
     fastfetch
     tree
-    (pkgs.writeShellScriptBin "update-immich" ''
-      echo "Pulling latest Immich images from GHCR..."
+    (pkgs.writeShellScriptBin "update-containers" ''
+      echo "Pulling latest images for all stacks..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
+      ${pkgs.docker}/bin/docker pull umagistr/seanime:latest-cuda
+      ${pkgs.docker}/bin/docker pull portainer/portainer-ce:latest
+      ${pkgs.docker}/bin/docker pull caddy:alpine
+      ${pkgs.docker}/bin/docker pull tailscale/tailscale:latest
       
-      echo "Restarting Immich containers to apply updates..."
-      systemctl restart docker-immich-server.service docker-immich-machine-learning.service
+      echo "Restarting all container stacks to apply updates and refresh sidecars..."
       
-      echo "Immich update complete!"
+      # Immich Stack
+      systemctl restart docker-tailscale-immich.service \
+                        docker-immich-server.service \
+                        docker-immich-machine-learning.service \
+                        docker-immich-redis.service \
+                        docker-immich-database.service \
+                        docker-immich-proxy.service
+
+      # Seanime Stack
+      systemctl restart docker-tailscale-seanime.service \
+                        docker-seanime.service \
+                        docker-seanime-proxy.service
+
+      # Portainer Stack
+      systemctl restart docker-tailscale-portainer.service \
+                        docker-portainer.service \
+                        docker-portainer-proxy.service
+      
+      echo "All containers updated and restarted!"
     '')
   ];
 }
