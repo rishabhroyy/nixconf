@@ -2,11 +2,11 @@
 
 {
   imports = [
-    # Include hardware-configuration if it was generated (we leave a placeholder or assume it's created by user)
     ./hardware-configuration.nix
     ./vfio.nix
     ./containers.nix
     ./samba-ntfs.nix
+    ../../modules/kvm-hypercall-patch.nix
   ];
   
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
