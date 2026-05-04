@@ -129,6 +129,8 @@
       environment = {
         NVIDIA_VISIBLE_DEVICES = "all";
         NVIDIA_DRIVER_CAPABILITIES = "all";
+        SEANIME_SERVER_HOST = "0.0.0.0";
+        SEANIME_SERVER_URL = "http://seanime";
       };
       volumes = [
         "/var/lib/seanime:/home/seanime/.config/Seanime"
