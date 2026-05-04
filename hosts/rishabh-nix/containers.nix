@@ -123,7 +123,6 @@
       dependsOn = [ "tailscale-seanime" ];
       extraOptions = [
         "--network=container:tailscale-seanime"
-        "--group-add=video"
       ];
       environment = {
         NVIDIA_VISIBLE_DEVICES = "all";
