@@ -20,7 +20,6 @@
       });
     in {
       qemu_kvm = applyHypercallFix prev.qemu_kvm;
-      qemu = applyHypercallFix prev.qemu;
     };
   in
   {
