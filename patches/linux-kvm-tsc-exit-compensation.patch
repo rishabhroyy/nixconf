@@ -1,11 +1,9 @@
 --- a/arch/x86/kvm/x86.c
 +++ b/arch/x86/kvm/x86.c
-@@ -2717,7 +2717,34 @@ static void kvm_vcpu_write_tsc_offset(struct kvm_vcpu *vcpu, u64 l1_offset)
- {
- 	vcpu->arch.l1_tsc_offset = l1_offset;
- 	kvm_x86_call(write_tsc_offset)(vcpu);
+@@ -2723,5 +2723,32 @@ static void kvm_vcpu_write_tsc_multiplier(struct kvm_vcpu *vcpu, u64 l1_multiplier)
+ 	kvm_x86_call(write_tsc_multiplier)(vcpu);
  }
- 
+
 +/*
 + * Hide short in-kernel VM-Exit handling windows from guest RDTSC probes.
 + *
@@ -33,7 +31,7 @@
 +	kvm_vcpu_write_tsc_offset(vcpu, vcpu->arch.l1_tsc_offset - delta);
 +}
 +
- static void kvm_vcpu_write_tsc_multiplier(struct kvm_vcpu *vcpu, u64 l1_multiplier)
+ static inline bool kvm_check_tsc_unstable(void)
  {
 @@ -11302,6 +11328,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
  	bool req_int_win =
