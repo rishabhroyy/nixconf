@@ -15,7 +15,25 @@
  //#define DEBUG_KVM
  
  #ifdef DEBUG_KVM
-@@ -2417,2 +2425,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+@@ -2400,19 +2408,28 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+     if (kvm_vm_check_extension(s, KVM_CAP_X86_USER_SPACE_MSR)) {
+         bool r;
+         ret = kvm_vm_enable_cap(s, KVM_CAP_X86_USER_SPACE_MSR, 0,
+                                 KVM_MSR_EXIT_REASON_FILTER);
+         if (ret) {
+             error_report("Could not enable user space MSRs: %s",
+                          strerror(-ret));
+             exit(1);
+         }
+         r = kvm_filter_msr(s, MSR_CORE_THREAD_COUNT,
+                            kvm_rdmsr_core_thread_count, NULL);
+         if (!r) {
+             error_report("Could not install MSR_CORE_THREAD_COUNT handler: %s",
+                          strerror(-ret));
+             exit(1);
+         }
+     }
++
 +    if (kvm_vm_ioctl(s, KVM_ENABLE_CAP, &(struct kvm_enable_cap) {
 +        .cap = KVM_CAP_DISABLE_QUIRKS2,
 +        .flags = 0,
