@@ -18,7 +18,6 @@ in
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
     "hugepagesz=2M"
-    "hugepages=12288"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
@@ -50,10 +49,42 @@ in
       GUEST_NAME="$1"
       OPERATION="$2"
       SUB_OPERATION="$3"
+      HUGEPAGES="12288"
+
+      allocate_hugepages() {
+          echo "$(date): allocating $HUGEPAGES hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
+          echo 1 > /proc/sys/vm/compact_memory || true
+          echo "$HUGEPAGES" > /proc/sys/vm/nr_hugepages
+
+          ALLOCATED="$(cat /proc/sys/vm/nr_hugepages)"
+          if [ "$ALLOCATED" -lt "$HUGEPAGES" ]; then
+              echo 1 > /proc/sys/vm/compact_memory || true
+              echo "$HUGEPAGES" > /proc/sys/vm/nr_hugepages
+              ALLOCATED="$(cat /proc/sys/vm/nr_hugepages)"
+          fi
+
+          if [ "$ALLOCATED" -lt "$HUGEPAGES" ]; then
+              echo "Failed to allocate $HUGEPAGES hugepages; only got $ALLOCATED" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
+              exit 1
+          fi
+      }
+
+      release_hugepages() {
+          echo "$(date): releasing hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
+          echo 0 > /proc/sys/vm/nr_hugepages || true
+      }
 
       if [ "$GUEST_NAME" == "win11" ]; then
           # Log the event for debugging
           echo "$(date): win11 $OPERATION $SUB_OPERATION" >> /tmp/qemu-hook.log
+
+          if [[ "$OPERATION" == "prepare" && "$SUB_OPERATION" == "begin" ]]; then
+              allocate_hugepages
+          fi
+          
+          if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
+              release_hugepages
+          fi
           
           if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
               # Only power off if the lock file does NOT exist
