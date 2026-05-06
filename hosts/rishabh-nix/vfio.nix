@@ -17,8 +17,16 @@ in
     "rcu_nocbs=2-7,10-15"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
-    "hugepagesz=2M"
+    "default_hugepagesz=1G"
+    "hugepagesz=1G"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
+  ];
+
+  boot.kernelPatches = [
+    {
+      name = "kvm-tsc-exit-compensation";
+      patch = ../../patches/linux-kvm-tsc-exit-compensation.patch;
+    }
   ];
 
   # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation)
@@ -39,9 +47,18 @@ in
     qemu = {
       package = pkgs.qemu_kvm;
       runAsRoot = true;
-      swtpm.enable = true;
+      swtpm.enable = false;
+      ovmf = {
+        enable = true;
+        packages = [ pkgs.OVMFFull.fd ];
+      };
     };
   };
+
+  services.udev.extraRules = ''
+    # Let the win11 QEMU process open the physical TPM 2.0 resource manager.
+    KERNEL=="tpmrm0", GROUP="qemu", MODE="0660"
+  '';
 
   # Hook for VM-to-Host Power Sync
   system.activationScripts.libvirt-hooks.text = let
@@ -49,29 +66,86 @@ in
       GUEST_NAME="$1"
       OPERATION="$2"
       SUB_OPERATION="$3"
-      HUGEPAGES="12288"
+      HUGEPAGES_1G="24"
+      HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+      HOST_CPU_LIST="0-1,8-9"
+      HOST_CPU_MASK="303"
+      DEFAULT_IRQ_STATE="/run/libvirt/win11-default-irq-affinity.state"
+      IRQ_STATE="/run/libvirt/win11-irq-affinity.state"
+      WORKQUEUE_STATE="/run/libvirt/win11-workqueue-cpumask.state"
 
       allocate_hugepages() {
-          echo "$(date): allocating $HUGEPAGES hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
-          echo 1 > /proc/sys/vm/compact_memory || true
-          echo "$HUGEPAGES" > /proc/sys/vm/nr_hugepages
-
-          ALLOCATED="$(cat /proc/sys/vm/nr_hugepages)"
-          if [ "$ALLOCATED" -lt "$HUGEPAGES" ]; then
-              echo 1 > /proc/sys/vm/compact_memory || true
-              echo "$HUGEPAGES" > /proc/sys/vm/nr_hugepages
-              ALLOCATED="$(cat /proc/sys/vm/nr_hugepages)"
+          echo "$(date): allocating $HUGEPAGES_1G 1G hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
+          if [ ! -w "$HUGEPAGES_1G_PATH" ]; then
+              echo "1G hugepages are not available at $HUGEPAGES_1G_PATH" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
+              exit 1
           fi
 
-          if [ "$ALLOCATED" -lt "$HUGEPAGES" ]; then
-              echo "Failed to allocate $HUGEPAGES hugepages; only got $ALLOCATED" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
+          echo 1 > /proc/sys/vm/compact_memory || true
+          echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
+
+          ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
+          if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
+              echo 1 > /proc/sys/vm/compact_memory || true
+              echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
+              ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
+          fi
+
+          if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
+              echo "Failed to allocate $HUGEPAGES_1G 1G hugepages; only got $ALLOCATED" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
               exit 1
           fi
       }
 
       release_hugepages() {
           echo "$(date): releasing hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
-          echo 0 > /proc/sys/vm/nr_hugepages || true
+          if [ -w "$HUGEPAGES_1G_PATH" ]; then
+              echo 0 > "$HUGEPAGES_1G_PATH" || true
+          fi
+      }
+
+      isolate_host_noise() {
+          mkdir -p /run/libvirt
+
+          : > "$IRQ_STATE"
+          for IRQ_AFFINITY in /proc/irq/*/smp_affinity_list; do
+              if [ -w "$IRQ_AFFINITY" ]; then
+                  ORIGINAL="$(cat "$IRQ_AFFINITY")"
+                  echo "$IRQ_AFFINITY $ORIGINAL" >> "$IRQ_STATE"
+                  echo "$HOST_CPU_LIST" > "$IRQ_AFFINITY" 2>/dev/null || true
+              fi
+          done
+
+          if [ -w /proc/irq/default_smp_affinity ]; then
+              cat /proc/irq/default_smp_affinity > "$DEFAULT_IRQ_STATE"
+              echo "$HOST_CPU_MASK" > /proc/irq/default_smp_affinity || true
+          fi
+
+          if [ -w /sys/devices/virtual/workqueue/cpumask ]; then
+              cat /sys/devices/virtual/workqueue/cpumask > "$WORKQUEUE_STATE"
+              echo "$HOST_CPU_MASK" > /sys/devices/virtual/workqueue/cpumask || true
+          fi
+      }
+
+      restore_host_noise() {
+          if [ -f "$IRQ_STATE" ]; then
+              while read -r IRQ_AFFINITY ORIGINAL; do
+                  if [ -w "$IRQ_AFFINITY" ]; then
+                      echo "$ORIGINAL" > "$IRQ_AFFINITY" 2>/dev/null || true
+                  fi
+              done < "$IRQ_STATE"
+              rm -f "$IRQ_STATE"
+          fi
+
+          if [ -f "$DEFAULT_IRQ_STATE" ] && [ -w /proc/irq/default_smp_affinity ]; then
+              cat "$DEFAULT_IRQ_STATE" > /proc/irq/default_smp_affinity || true
+              rm -f "$DEFAULT_IRQ_STATE"
+          fi
+
+          if [ -f "$WORKQUEUE_STATE" ] && [ -w /sys/devices/virtual/workqueue/cpumask ]; then
+              cat "$WORKQUEUE_STATE" > /sys/devices/virtual/workqueue/cpumask || true
+              rm -f "$WORKQUEUE_STATE"
+          fi
       }
 
       if [ "$GUEST_NAME" == "win11" ]; then
@@ -80,9 +154,11 @@ in
 
           if [[ "$OPERATION" == "prepare" && "$SUB_OPERATION" == "begin" ]]; then
               allocate_hugepages
+              isolate_host_noise
           fi
           
           if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
+              restore_host_noise
               release_hugepages
           fi
           
@@ -130,14 +206,94 @@ in
       chown root:root /var/lib/libvirt/qemu/6700xt.rom
       chmod 644 /var/lib/libvirt/qemu/6700xt.rom
 
+      if [ ! -f /run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd ]; then
+        echo "Missing Secure Boot OVMF firmware: /run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd"
+        exit 1
+      fi
+
+      mkdir -p /var/lib/libvirt/qemu/acpi
+      for TABLE in FACP DSDT; do
+        if [ -f "/sys/firmware/acpi/tables/$TABLE" ]; then
+          cp "/sys/firmware/acpi/tables/$TABLE" "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
+          ${pkgs.perl}/bin/perl -0pi \
+            -e 's/QEMU/AMI_/g; s/BOCHS/AMI00/g; s/BXPC/AMIP/g; s/BOCH/AMI0/g' \
+            "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
+          ${pkgs.python3}/bin/python3 -c 'import sys; p=sys.argv[1]; b=bytearray(open(p, "rb").read()); b[9]=0; b[9]=(-sum(b)) & 0xff; open(p, "wb").write(b)' \
+            "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
+          if [ "$TABLE" = "DSDT" ]; then
+            mv "/var/lib/libvirt/qemu/acpi/$TABLE.tmp" /var/lib/libvirt/qemu/acpi/DSDT.aml
+          else
+            mv "/var/lib/libvirt/qemu/acpi/$TABLE.tmp" "/var/lib/libvirt/qemu/acpi/$TABLE.bin"
+          fi
+        fi
+      done
+      chmod 644 /var/lib/libvirt/qemu/acpi/FACP.bin /var/lib/libvirt/qemu/acpi/DSDT.aml 2>/dev/null || true
+
       # Always redefine the VM to ensure XML template changes are applied
       if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
         echo "Updating existing win11 VM definition..."
         ${pkgs.libvirt}/bin/virsh undefine win11 --nvram
       fi
 
-      export UUID=$(cat /run/secrets/motherboard_uuid)
-      export SERIAL=$(cat /run/secrets/motherboard_serial)
+      xml_escape() {
+        printf '%s' "$1" | ${pkgs.gnused}/bin/sed \
+          -e 's/&/\&amp;/g' \
+          -e 's/</\&lt;/g' \
+          -e 's/>/\&gt;/g' \
+          -e "s/'/\&apos;/g"
+      }
+
+      dmi_value() {
+        VALUE="$(${pkgs.dmidecode}/bin/dmidecode -s "$1" 2>/dev/null | ${pkgs.gnused}/bin/sed '/^$/d' | ${pkgs.coreutils}/bin/head -n1 || true)"
+        if [ -z "$VALUE" ] || [ "$VALUE" = "Not Specified" ] || [ "$VALUE" = "To Be Filled By O.E.M." ]; then
+          VALUE="$2"
+        fi
+        xml_escape "$VALUE"
+      }
+
+      detect_tsc_hz() {
+        if [ -f /var/lib/libvirt/qemu/tsc-frequency-hz ]; then
+          ${pkgs.coreutils}/bin/cat /var/lib/libvirt/qemu/tsc-frequency-hz
+          return
+        fi
+
+        MHZ="$(${pkgs.dmidecode}/bin/dmidecode -s processor-frequency 2>/dev/null | ${pkgs.gawk}/bin/awk '{ print int($1); exit }')"
+        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
+          MHZ="$(${pkgs.util-linux}/bin/lscpu | ${pkgs.gawk}/bin/awk -F: '/CPU max MHz/ { gsub(/^[ \t]+/, "", $2); print int($2); exit }')"
+        fi
+        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
+          MHZ="$(${pkgs.gawk}/bin/awk -F: '/cpu MHz/ { gsub(/^[ \t]+/, "", $2); print int($2); exit }' /proc/cpuinfo)"
+        fi
+        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
+          MHZ="3800"
+        fi
+
+        # Request a stable virtual TSC just outside KVM's no-scaling tolerance.
+        ${pkgs.gawk}/bin/awk -v mhz="$MHZ" 'BEGIN { printf "%.0f\n", mhz * 1000000 * 0.999 }'
+      }
+
+      RAW_UUID="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_uuid)"
+      RAW_SERIAL="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_serial)"
+
+      export UUID="$(xml_escape "$RAW_UUID")"
+      export SERIAL="$(xml_escape "$RAW_SERIAL")"
+      export BIOS_VENDOR="$(dmi_value bios-vendor "American Megatrends International, LLC.")"
+      export BIOS_VERSION="$(dmi_value bios-version "1.0")"
+      export BIOS_DATE="$(dmi_value bios-release-date "01/01/2024")"
+      export SYSTEM_MANUFACTURER="$(dmi_value system-manufacturer "Micro-Star International Co., Ltd.")"
+      export SYSTEM_PRODUCT="$(dmi_value system-product-name "MS-7C37")"
+      export SYSTEM_VERSION="$(dmi_value system-version "1.0")"
+      export SYSTEM_SERIAL="$(dmi_value system-serial-number "$RAW_SERIAL")"
+      export BASEBOARD_MANUFACTURER="$(dmi_value baseboard-manufacturer "Micro-Star International Co., Ltd.")"
+      export BASEBOARD_PRODUCT="$(dmi_value baseboard-product-name "MPG X570 GAMING EDGE WIFI (MS-7C37)")"
+      export BASEBOARD_VERSION="$(dmi_value baseboard-version "1.0")"
+      export BASEBOARD_SERIAL="$(dmi_value baseboard-serial-number "$RAW_SERIAL")"
+      export CHASSIS_MANUFACTURER="$(dmi_value chassis-manufacturer "Micro-Star International Co., Ltd.")"
+      export CHASSIS_VERSION="$(dmi_value chassis-version "1.0")"
+      export CHASSIS_SERIAL="$(dmi_value chassis-serial-number "$RAW_SERIAL")"
+      export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "Default string")"
+      export CHASSIS_SKU="$(dmi_value chassis-sku-number "Default string")"
+      export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
@@ -152,6 +308,68 @@ in
     virt-manager
     libguestfs
     config.virtualisation.libvirtd.qemu.package
+    dmidecode
     envsubst
+    lsof
+    psmisc
+    tpm2-tools
+    (pkgs.writeShellScriptBin "free-win11-hugepages" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is still running; shut it down before freeing its hugepages." >&2
+        exit 1
+      fi
+
+      if [ -w /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]; then
+        echo 0 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+      fi
+
+      if [ -w /proc/sys/vm/nr_hugepages ]; then
+        echo 0 > /proc/sys/vm/nr_hugepages
+      fi
+
+      echo "Hugepages after release:"
+      ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo
+      echo "1G hugepages:"
+      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
+    '')
+    (pkgs.writeShellScriptBin "verify-win11-vfio" ''
+      set -eu
+
+      echo "== QEMU =="
+      XML_QEMU="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<emulator>\(.*\)</emulator>.*:\1:p')"
+      echo "xml: $XML_QEMU"
+      if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
+        ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
+      fi
+
+      echo
+      echo "== TSC =="
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'tsc-scaling-patch|tsc exit compensation active' || true
+
+      echo
+      echo "== TPM =="
+      ${pkgs.coreutils}/bin/ls -l /dev/tpm0 /dev/tpmrm0 2>/dev/null || true
+      ${pkgs.coreutils}/bin/cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A4 '<tpm' || true
+
+      echo
+      echo "== ACPI =="
+      ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A5 -- '-acpitable' || true
+
+      echo
+      echo "== CPU affinity =="
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin' || true
+      ${pkgs.coreutils}/bin/cat /proc/irq/default_smp_affinity 2>/dev/null || true
+      ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
+
+      echo
+      echo "== Hugepages =="
+      ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize' /proc/meminfo
+      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
+    '')
   ];
 }

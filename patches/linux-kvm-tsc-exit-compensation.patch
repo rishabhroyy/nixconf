@@ -1,0 +1,71 @@
+--- a/arch/x86/kvm/x86.c
++++ b/arch/x86/kvm/x86.c
+@@ -2719,6 +2719,32 @@ static void kvm_vcpu_write_tsc_offset(struct kvm_vcpu *vcpu, u64 l1_offset)
+ 	kvm_x86_call(write_tsc_offset)(vcpu);
+ }
+ 
++/*
++ * Hide short in-kernel VM-Exit handling windows from guest RDTSC probes.
++ *
++ * This deliberately compensates only exits that KVM handles and immediately
++ * resumes in-kernel.  Exits to userspace, halted vCPUs, blocking, scheduling,
++ * and other long host-side gaps are left visible to keep Windows timekeeping
++ * monotonic and avoid large wall-clock drift.
++ */
++#define KVM_TSC_EXIT_COMP_MAX_CYCLES 500000ULL
++
++static __always_inline void kvm_tsc_compensate_short_vmexit(struct kvm_vcpu *vcpu,
++							   u64 exit_tsc)
++{
++	u64 delta;
++
++	if (!exit_tsc || vcpu->arch.guest_tsc_protected)
++		return;
++
++	delta = kvm_scale_tsc(rdtsc_ordered() - exit_tsc,
++			      vcpu->arch.l1_tsc_scaling_ratio);
++	if (!delta || delta > KVM_TSC_EXIT_COMP_MAX_CYCLES)
++		return;
++
++	pr_info_once("kvm: tsc exit compensation active\n");
++	kvm_vcpu_write_tsc_offset(vcpu, vcpu->arch.l1_tsc_offset - delta);
++}
++
+ static void kvm_vcpu_write_tsc_multiplier(struct kvm_vcpu *vcpu, u64 l1_multiplier)
+ {
+ 	vcpu->arch.l1_tsc_scaling_ratio = l1_multiplier;
+@@ -11302,6 +11328,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	bool req_int_win =
+ 		dm_request_for_irq_injection(vcpu) &&
+ 		kvm_cpu_accept_dm_intr(vcpu);
++	u64 exit_tsc = 0;
+ 	fastpath_t exit_fastpath;
+ 
+ 	bool req_immediate_exit = false;
+@@ -11542,6 +11569,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 
+ 		exit_fastpath = kvm_x86_call(vcpu_run)(vcpu, run_flags);
++		exit_tsc = rdtsc_ordered();
+ 		if (likely(exit_fastpath != EXIT_FASTPATH_REENTER_GUEST))
+ 			break;
+ 
+@@ -11558,6 +11586,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 
+ 		/* Note, VM-Exits that go down the "slow" path are accounted below. */
+ 		++vcpu->stat.exits;
++
++		kvm_tsc_compensate_short_vmexit(vcpu, exit_tsc);
+ 	}
+ 
+ 	kvm_load_host_pkru(vcpu);
+@@ -11606,7 +11636,11 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+ 	if (unlikely(exit_fastpath == EXIT_FASTPATH_EXIT_USERSPACE))
+ 		return 0;
+ 
+ 	r = kvm_x86_call(handle_exit)(vcpu, exit_fastpath);
++	if (r > 0)
++		kvm_tsc_compensate_short_vmexit(vcpu, exit_tsc);
++
+ 	return r;
+ 
+ cancel_injection:
