@@ -1,6 +1,6 @@
 --- a/arch/x86/kvm/x86.c
 +++ b/arch/x86/kvm/x86.c
-@@ -2719,6 +2719,32 @@ static void kvm_vcpu_write_tsc_offset(struct kvm_vcpu *vcpu, u64 l1_offset)
+@@ -2719,4 +2719,30 @@ static void kvm_vcpu_write_tsc_offset(struct kvm_vcpu *vcpu, u64 l1_offset)
  	kvm_x86_call(write_tsc_offset)(vcpu);
  }
  
@@ -42,14 +42,14 @@
  	fastpath_t exit_fastpath;
  
  	bool req_immediate_exit = false;
-@@ -11542,6 +11569,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+@@ -11542,4 +11569,5 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
  
  		exit_fastpath = kvm_x86_call(vcpu_run)(vcpu, run_flags);
 +		exit_tsc = rdtsc_ordered();
  		if (likely(exit_fastpath != EXIT_FASTPATH_REENTER_GUEST))
  			break;
  
-@@ -11558,6 +11586,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+@@ -11558,5 +11586,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
  
  		/* Note, VM-Exits that go down the "slow" path are accounted below. */
  		++vcpu->stat.exits;
@@ -58,7 +58,7 @@
  	}
  
  	kvm_load_host_pkru(vcpu);
-@@ -11606,7 +11636,11 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
+@@ -11606,6 +11636,10 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
  	if (unlikely(exit_fastpath == EXIT_FASTPATH_EXIT_USERSPACE))
  		return 0;
  
