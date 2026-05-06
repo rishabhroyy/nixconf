@@ -34,6 +34,19 @@ static void set_v8086_seg' '    if (kvm_vm_ioctl(s, KVM_ENABLE_CAP, &(struct kvm
 }
 
 static void set_v8086_seg'
+          substituteInPlace target/i386/kvm/kvm.c \
+            --replace-fail '    return 0;
+}
+
+static bool tsc_is_stable_and_known' '    if (env->tsc_khz) {
+        info_report("tsc-scaling-patch: guest TSC frequency set to %" PRId64 " kHz",
+                    env->tsc_khz);
+    }
+
+    return 0;
+}
+
+static bool tsc_is_stable_and_known'
         '';
       });
     in {
