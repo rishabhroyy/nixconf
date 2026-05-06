@@ -15,8 +15,12 @@
  //#define DEBUG_KVM
  
  #ifdef DEBUG_KVM
-@@ -2417,2 +2425,6 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
-+    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
+@@ -2417,2 +2425,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
++    if (kvm_vm_ioctl(s, KVM_ENABLE_CAP, &(struct kvm_enable_cap) {
++        .cap = KVM_CAP_DISABLE_QUIRKS2,
++        .flags = 0,
++        .args = { KVM_X86_QUIRK_FIX_HYPERCALL_INSN },
++    })) {
 +        warn_report("kvm: failed to disable hypercall quirk");
 +    }
 +
