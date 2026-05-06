@@ -15,16 +15,10 @@
  //#define DEBUG_KVM
  
  #ifdef DEBUG_KVM
-@@ -2388,6 +2396,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
-             error_report("Could not install MSR_CORE_THREAD_COUNT handler: %s",
-                          strerror(-ret));
-             exit(1);
-         }
-     }
-+
+@@ -2417,2 +2425,6 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
 +    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
 +        warn_report("kvm: failed to disable hypercall quirk");
 +    }
- 
++
      return 0;
  }
