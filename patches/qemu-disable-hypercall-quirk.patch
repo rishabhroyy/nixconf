@@ -1,15 +1,13 @@
 --- a/target/i386/kvm/kvm.c
 +++ b/target/i386/kvm/kvm.c
-@@ -3348,5 +3348,12 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+@@ -3381,6 +3381,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+             return ret;
          }
      }
- 
-+    info_report("vmcall-patch: attempting to disable KVM_X86_QUIRK_FIX_HYPERCALL_INSN");
-+    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
-+        warn_report("vmcall-patch: FAILED to disable hypercall quirk - pages will still be write-protected");
-+    } else {
-+        info_report("vmcall-patch: SUCCESS - hypercall quirk disabled");
-+    }
 +
++    if (kvm_vm_enable_cap(s, KVM_CAP_DISABLE_QUIRKS2, 0, KVM_X86_QUIRK_FIX_HYPERCALL_INSN)) {
++        warn_report("kvm: failed to disable hypercall quirk");
++    }
+ 
      return 0;
  }
