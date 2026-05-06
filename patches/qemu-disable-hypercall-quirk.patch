@@ -1,7 +1,24 @@
 --- a/target/i386/kvm/kvm.c
 +++ b/target/i386/kvm/kvm.c
-@@ -3381,6 +3381,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
-             return ret;
+@@ -68,6 +68,14 @@
+ 
+ #include CONFIG_DEVICES
+ 
++#ifndef KVM_CAP_DISABLE_QUIRKS2
++#define KVM_CAP_DISABLE_QUIRKS2 213
++#endif
++
++#ifndef KVM_X86_QUIRK_FIX_HYPERCALL_INSN
++#define KVM_X86_QUIRK_FIX_HYPERCALL_INSN (1 << 5)
++#endif
++
+ //#define DEBUG_KVM
+ 
+ #ifdef DEBUG_KVM
+@@ -2388,6 +2396,10 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+             error_report("Could not install MSR_CORE_THREAD_COUNT handler: %s",
+                          strerror(-ret));
+             exit(1);
          }
      }
 +
