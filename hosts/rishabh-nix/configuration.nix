@@ -179,6 +179,7 @@
     tmux
     htop
     btop
+    github-cli
     
     # Archives
     zip
@@ -228,6 +229,13 @@
       echo "All containers updated and restarted!"
     '')
   ];
+
+  programs.git = {
+    enable = true;
+    config = {
+      credential.helper = "${pkgs.github-cli}/bin/gh auth git-credential";
+    };
+  };
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
