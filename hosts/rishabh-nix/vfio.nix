@@ -293,7 +293,19 @@ in
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
-      ${pkgs.envsubst}/bin/envsubst < ${./win11-template.xml} > /tmp/win11-resolved.xml
+      ${pkgs.envsubst}/bin/envsubst \
+        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $TSC_FREQUENCY_HZ $QEMU_SYSTEM_X86_64' \
+        < ${./win11-template.xml} > /tmp/win11-resolved.xml
+
+      if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' /tmp/win11-resolved.xml; then
+        echo "Unresolved placeholders remain in /tmp/win11-resolved.xml"
+        ${pkgs.gnugrep}/bin/grep '\$[A-Z_]' /tmp/win11-resolved.xml
+        exit 1
+      fi
+
+      ${pkgs.gnugrep}/bin/grep -q 'tsc-frequency=' /tmp/win11-resolved.xml
+      ${pkgs.gnugrep}/bin/grep -q '<qemu:commandline>' /tmp/win11-resolved.xml
+
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
       ${pkgs.libvirt}/bin/virsh autostart win11
       rm /tmp/win11-resolved.xml
@@ -339,6 +351,11 @@ in
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
       fi
+      PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
+      if [ -n "$PID" ]; then
+        ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o 'tsc-frequency=[^, ]*' || true
+        ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o -- '-acpitable file=[^ ]*' || true
+      fi
 
       echo
       echo "== TSC =="
@@ -354,7 +371,7 @@ in
       echo
       echo "== ACPI =="
       ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A5 -- '-acpitable' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
 
       echo
       echo "== CPU affinity =="
