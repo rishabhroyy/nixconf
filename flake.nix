@@ -17,6 +17,24 @@
     let
       applyHypercallFix = pkg: pkg.overrideAttrs (old: {
         patches = (old.patches or []) ++ [ ./patches/qemu-disable-hypercall-quirk.patch ];
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace target/i386/kvm/kvm.c \
+            --replace-fail '    return 0;
+}
+
+static void set_v8086_seg' '    if (kvm_vm_ioctl(s, KVM_ENABLE_CAP, &(struct kvm_enable_cap) {
+        .cap = KVM_CAP_DISABLE_QUIRKS2,
+        .flags = 0,
+        .args = { KVM_X86_QUIRK_FIX_HYPERCALL_INSN },
+    })) {
+        warn_report("kvm: failed to disable hypercall quirk");
+    }
+
+    return 0;
+}
+
+static void set_v8086_seg'
+        '';
       });
     in {
       qemu_kvm = applyHypercallFix prev.qemu_kvm;
