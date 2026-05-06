@@ -107,6 +107,7 @@ in
 
       export UUID=$(cat /run/secrets/motherboard_uuid)
       export SERIAL=$(cat /run/secrets/motherboard_serial)
+      export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
       ${pkgs.envsubst}/bin/envsubst < ${./win11-template.xml} > /tmp/win11-resolved.xml
@@ -119,7 +120,7 @@ in
   environment.systemPackages = with pkgs; [
     virt-manager
     libguestfs
-    qemu
+    config.virtualisation.libvirtd.qemu.package
     envsubst
   ];
 }
