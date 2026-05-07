@@ -400,10 +400,13 @@ EOF
           }
         }
       ')"
-      if [ -z "$RAW_MEMORY_MANUFACTURER" ]; then RAW_MEMORY_MANUFACTURER="Micro-Star International Co. Ltd."; fi
-      if ! valid_serial_value "$RAW_MEMORY_SERIAL"; then RAW_MEMORY_SERIAL="$DERIVED_MEMORY_SERIAL"; fi
+      if printf '%s' "$RAW_MEMORY_PART" | ${pkgs.gnugrep}/bin/grep -qi '^CMK'; then
+        RAW_MEMORY_MANUFACTURER="Corsair"
+      fi
+      if [ -z "$RAW_MEMORY_MANUFACTURER" ]; then RAW_MEMORY_MANUFACTURER="Corsair"; fi
       if [ -z "$RAW_MEMORY_PART" ]; then RAW_MEMORY_PART="DDR4-3200"; fi
       if [ -z "$RAW_MEMORY_SPEED" ] || [ "$RAW_MEMORY_SPEED" = "0" ]; then RAW_MEMORY_SPEED="3200"; fi
+      if ! valid_serial_value "$RAW_MEMORY_SERIAL"; then RAW_MEMORY_SERIAL="$DERIVED_MEMORY_SERIAL"; fi
 
       export UUID="$(xml_escape "$RAW_UUID")"
       export SERIAL="$(xml_escape "$RAW_SERIAL")"
