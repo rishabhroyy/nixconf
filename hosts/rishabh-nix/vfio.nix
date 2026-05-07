@@ -75,7 +75,7 @@ in
       GUEST_NAME="$1"
       OPERATION="$2"
       SUB_OPERATION="$3"
-      HUGEPAGES_1G="24"
+      HUGEPAGES_1G="16"
       HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
       HOST_CPU_LIST="0-1,8-9"
       HOST_CPU_MASK="303"
