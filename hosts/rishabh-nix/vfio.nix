@@ -231,9 +231,13 @@ in
         fi
       done
       chmod 644 /var/lib/libvirt/qemu/acpi/FACP.bin /var/lib/libvirt/qemu/acpi/DSDT.aml 2>/dev/null || true
-      if [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then
-        echo "Retiring old full-FACP ACPI spoofing toggle; QEMU ACPI OEM IDs are patched at build time now."
+      if [ ! -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing ]; then
         rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
+        rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
+        rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
+      elif [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then
+        echo "Retiring old full-FACP ACPI spoofing toggle name; use enable-facp-spoofing instead."
+        mv /var/lib/libvirt/qemu/enable-acpi-spoofing /var/lib/libvirt/qemu/enable-facp-spoofing
       fi
 
       if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
@@ -367,6 +371,7 @@ in
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "ACPI spoofing is now the safe QEMU-header mode: no full host FACP/DSDT tables are injected."
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
@@ -380,6 +385,7 @@ in
       fi
 
       ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
@@ -394,6 +400,7 @@ in
       fi
 
       ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
@@ -410,6 +417,7 @@ in
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
     '')
@@ -442,7 +450,12 @@ in
       echo "xml: $XML_QEMU"
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
-        ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'ACPI_BUILD_APPNAME|BOCHS|BXPC|ALASKA|A M I' || true
+        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'ALASKA' &&
+           ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'A M I'; then
+          echo "qemu-acpi-oem=patched"
+        else
+          echo "qemu-acpi-oem=missing-patch"
+        fi
       fi
       PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
       if [ -n "$PID" ]; then
@@ -462,6 +475,10 @@ in
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure-boot|firmware' || true
 
       echo
+      echo "== CPU / Hypervisor Masking =="
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|hidden state='on'|vendor_id state='on'|timer name='hypervclock'|timer name='tsc'" || true
+
+      echo
       echo "== TPM =="
       ${pkgs.coreutils}/bin/ls -l /dev/tpm0 /dev/tpmrm0 2>/dev/null || true
       ${pkgs.coreutils}/bin/cat /sys/class/tpm/tpm0/tpm_version_major 2>/dev/null || true
@@ -470,6 +487,8 @@ in
       echo
       echo "== ACPI =="
       echo "acpi-spoofing=qemu-header-patch"
+      ${pkgs.coreutils}/bin/printf 'allow-legacy-acpi-spoofing='
+      if [ -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
       ${pkgs.coreutils}/bin/printf 'legacy-facp-spoofing='
       if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
       ${pkgs.coreutils}/bin/printf 'legacy-dsdt-spoofing='
