@@ -214,6 +214,41 @@ in
         exit 1
       fi
 
+      enroll_secure_boot_keys_once() {
+        NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
+        TEMPLATE=/run/libvirt/nix-ovmf/edk2-i386-vars.fd
+        MARKER=/var/lib/libvirt/qemu/nvram/win11_VARS.fd.secureboot-enrolled
+        INPUT="$NVRAM"
+
+        if [ -f "$MARKER" ] && [ -f "$NVRAM" ]; then
+          return
+        fi
+
+        if [ ! -f "$INPUT" ]; then
+          if [ ! -f "$TEMPLATE" ]; then
+            echo "No existing win11 NVRAM and no template at $TEMPLATE" >&2
+            exit 1
+          fi
+          INPUT="$TEMPLATE"
+        fi
+
+        mkdir -p "$(${pkgs.coreutils}/bin/dirname "$NVRAM")"
+        TMP="$NVRAM.secboot.tmp"
+
+        ${pkgs.python3Packages.virt-firmware}/bin/virt-fw-vars \
+          --input "$INPUT" \
+          --output "$TMP" \
+          --enroll-redhat \
+          --secure-boot
+
+        ${pkgs.coreutils}/bin/install -m 0600 "$TMP" "$NVRAM"
+        ${pkgs.coreutils}/bin/rm -f "$TMP"
+        ${pkgs.coreutils}/bin/date -Is > "$MARKER"
+        echo "Enrolled Secure Boot keys into $NVRAM"
+      }
+
+      enroll_secure_boot_keys_once
+
       mkdir -p /var/lib/libvirt/qemu/acpi
       for TABLE in FACP DSDT; do
         if [ -f "/sys/firmware/acpi/tables/$TABLE" ]; then
@@ -288,6 +323,10 @@ in
 
       RAW_UUID="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_uuid)"
       RAW_SERIAL="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_serial)"
+      RAW_UUID_COMPACT="$(printf '%s' "$RAW_UUID" | ${pkgs.coreutils}/bin/tr -d '-' | ${pkgs.coreutils}/bin/cut -c1-16)"
+      DERIVED_SYSTEM_SERIAL="MSI$RAW_UUID_COMPACT"
+      DERIVED_CHASSIS_SERIAL="$RAW_SERIAL-C"
+      DERIVED_CHASSIS_ASSET="$RAW_SERIAL-A"
 
       export UUID="$(xml_escape "$RAW_UUID")"
       export SERIAL="$(xml_escape "$RAW_SERIAL")"
@@ -297,15 +336,15 @@ in
       export SYSTEM_MANUFACTURER="$(dmi_value system-manufacturer "Micro-Star International Co., Ltd.")"
       export SYSTEM_PRODUCT="$(dmi_value system-product-name "MS-7C37")"
       export SYSTEM_VERSION="$(dmi_value system-version "1.0")"
-      export SYSTEM_SERIAL="$(dmi_value system-serial-number "$RAW_SERIAL")"
+      export SYSTEM_SERIAL="$(dmi_value system-serial-number "$DERIVED_SYSTEM_SERIAL")"
       export BASEBOARD_MANUFACTURER="$(dmi_value baseboard-manufacturer "Micro-Star International Co., Ltd.")"
       export BASEBOARD_PRODUCT="$(dmi_value baseboard-product-name "MPG X570 GAMING EDGE WIFI (MS-7C37)")"
       export BASEBOARD_VERSION="$(dmi_value baseboard-version "1.0")"
       export BASEBOARD_SERIAL="$(dmi_value baseboard-serial-number "$RAW_SERIAL")"
       export CHASSIS_MANUFACTURER="$(dmi_value chassis-manufacturer "Micro-Star International Co., Ltd.")"
       export CHASSIS_VERSION="$(dmi_value chassis-version "1.0")"
-      export CHASSIS_SERIAL="$(dmi_value chassis-serial-number "$RAW_SERIAL")"
-      export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "$RAW_SERIAL")"
+      export CHASSIS_SERIAL="$(dmi_value chassis-serial-number "$DERIVED_CHASSIS_SERIAL")"
+      export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "$DERIVED_CHASSIS_ASSET")"
       export CHASSIS_SKU="$(dmi_value chassis-sku-number "MS-7C37")"
       export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
@@ -536,6 +575,7 @@ in
 
       ${pkgs.coreutils}/bin/install -m 0600 "$TMP" "$NVRAM"
       ${pkgs.coreutils}/bin/rm -f "$TMP"
+      ${pkgs.coreutils}/bin/date -Is > "$NVRAM.secureboot-enrolled"
 
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "Enrolled Secure Boot keys into $NVRAM"
