@@ -66,6 +66,11 @@ static bool tsc_is_stable_and_known'
           substituteInPlace hw/pci-bridge/pcie_pci_bridge.c \
             --replace-fail 'k->vendor_id = PCI_VENDOR_ID_REDHAT;' 'k->vendor_id = PCI_VENDOR_ID_AMD;' \
             --replace-fail 'k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_BRIDGE;' 'k->device_id = 0x1483;'
+          substituteInPlace hw/usb/hcd-xhci-pci.c \
+            --replace-fail 'k->vendor_id    = PCI_VENDOR_ID_REDHAT;' 'k->vendor_id    = PCI_VENDOR_ID_AMD;' \
+            --replace-fail 'k->device_id    = PCI_DEVICE_ID_REDHAT_XHCI;' 'k->device_id    = 0x149c;
+    k->subsystem_vendor_id = 0x1462;
+    k->subsystem_id = 0x7c37;'
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$out/nix-support"
@@ -75,6 +80,7 @@ qemu-tsc-frequency-log=present
 qemu-acpi-oem=patched
 qemu-fwcfg-acpi-hid=MSI0002
 qemu-pcie-bridge-ids=1022:1483
+qemu-xhci-id=1022:149c
 EOF
         '';
       });
