@@ -209,12 +209,8 @@
   </devices>
 
   <qemu:commandline>
-    <qemu:arg value='-cpu'/>
-    <qemu:arg value='host,migratable=no,+invtsc,tsc-frequency=$TSC_FREQUENCY_HZ'/>
     <qemu:arg value='-acpitable'/>
     <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/FACP.bin'/>
-    <qemu:arg value='-acpitable'/>
-    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/DSDT.aml'/>
   </qemu:commandline>
 
 </domain>
