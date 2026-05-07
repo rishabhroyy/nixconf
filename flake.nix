@@ -90,6 +90,27 @@ static bool tsc_is_stable_and_known'
             --replace-fail 'k->device_id    = PCI_DEVICE_ID_REDHAT_XHCI;' 'k->device_id    = 0x149c;
     k->subsystem_vendor_id = 0x1462;
     k->subsystem_id = 0x7c37;'
+          substituteInPlace hw/smbios/smbios.c \
+            --replace-fail '#define MAX_DIMM_SZ (16ll * ONE_GB)' '#define MAX_DIMM_SZ (8ll * ONE_GB)' \
+            --replace-fail '    char loc_str[128];' '    char loc_str[128];
+    char serial_str[128];
+    char asset_str[128];' \
+            --replace-fail '    t->memory_type = 0x07; /* RAM */
+    t->type_detail = cpu_to_le16(0x02); /* Other */' '    t->memory_type = 0x1A; /* DDR4 */
+    t->type_detail = cpu_to_le16(0x0080); /* Synchronous */' \
+            --replace-fail '    SMBIOS_TABLE_SET_STR(17, serial_number_str, type17.serial);
+    SMBIOS_TABLE_SET_STR(17, asset_tag_number_str, type17.asset);' '    if (type17.serial) {
+        snprintf(serial_str, sizeof(serial_str), "%s%u", type17.serial, instance);
+        SMBIOS_TABLE_SET_STR(17, serial_number_str, serial_str);
+    } else {
+        SMBIOS_TABLE_SET_STR(17, serial_number_str, type17.serial);
+    }
+    if (type17.asset) {
+        snprintf(asset_str, sizeof(asset_str), "%s%u", type17.asset, instance);
+        SMBIOS_TABLE_SET_STR(17, asset_tag_number_str, asset_str);
+    } else {
+        SMBIOS_TABLE_SET_STR(17, asset_tag_number_str, type17.asset);
+    }'
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$out/nix-support"
@@ -100,6 +121,9 @@ qemu-acpi-oem=patched
 qemu-fwcfg-acpi-hid=MSI0002
 qemu-pcie-bridge-ids=1022:1483
 qemu-xhci-id=1022:149c
+qemu-smbios-memory-split=8GiB
+qemu-smbios-memory-type=DDR4
+qemu-smbios-memory-serials=per-dimm
 EOF
         '';
       });
