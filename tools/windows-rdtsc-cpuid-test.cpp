@@ -810,7 +810,7 @@ static void check_windows_security_state()
 
     const std::string dg = run_command(
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"Get-CimInstance -ClassName Win32_DeviceGuard | "
+        "\"Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard -ClassName Win32_DeviceGuard | "
         "Select-Object SecurityServicesConfigured,SecurityServicesRunning,VirtualizationBasedSecurityStatus,"
         "RequiredSecurityProperties,AvailableSecurityProperties | Format-List\" 2>NUL");
     if (!trim(dg).empty()) {
