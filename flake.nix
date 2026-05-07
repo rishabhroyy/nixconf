@@ -61,7 +61,7 @@ EOF
         '';
       });
     in {
-      qemu = applyGhostQemuPatches prev.qemu;
+      qemu_ghost = applyGhostQemuPatches prev.qemu_kvm;
     };
   in
   {

@@ -43,7 +43,7 @@ in
     onBoot = "ignore";
     onShutdown = "shutdown";
     qemu = {
-      package = pkgs.qemu_kvm;
+      package = pkgs.qemu_ghost;
       runAsRoot = true;
       swtpm.enable = false;
     };
