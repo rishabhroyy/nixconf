@@ -1,11 +1,17 @@
-{ config, pkgs, inputs, ... }:
+{ config, pkgs, inputs, lib, ... }:
 
+let
+  # Emergency boot profile. Keep this true until the host boots cleanly again.
+  # It disables VFIO, custom KVM/QEMU boot-time pieces, and auto VM definition.
+  recoveryMode = true;
+in
 {
   imports = [
     ./hardware-configuration.nix
-    ./vfio.nix
+  ] ++ lib.optionals (!recoveryMode) [
     ./containers.nix
     ./samba-ntfs.nix
+    ./vfio.nix
     ../../modules/kvm-hypercall-patch.nix
   ];
   
@@ -44,6 +50,13 @@
       ./keys/mac.pub
       ./keys/windows.pub
     ];
+  };
+
+  users.groups = lib.mkIf recoveryMode {
+    docker = {};
+    kvm = {};
+    libvirtd = {};
+    qemu = {};
   };
 
   # SOPS Secrets configuration
@@ -92,8 +105,8 @@
 
   # Enable NVIDIA drivers for the host GPU (Quadro P620) to support CUDA in Docker
   hardware.graphics.enable = true;
-  services.xserver.videoDrivers = [ "nvidia" ];
-  hardware.nvidia = {
+  services.xserver.videoDrivers = lib.optionals (!recoveryMode) [ "nvidia" ];
+  hardware.nvidia = lib.mkIf (!recoveryMode) {
     modesetting.enable = true;
     open = false; # P620 requires the closed-source driver
     nvidiaSettings = false;
@@ -101,7 +114,7 @@
   };
   
   # Enable NVIDIA Container Toolkit for Docker (--gpus=all)
-  hardware.nvidia-container-toolkit.enable = true;
+  hardware.nvidia-container-toolkit.enable = !recoveryMode;
 
   # ---------------------------------------------------------
   # Power Sync & ACPI (Host Shutdown triggered by Power Button)
@@ -109,7 +122,7 @@
   # Intercept the physical power button so logind doesn't immediately kill the host
   services.logind.settings.Login.HandlePowerKey = "ignore";
   
-  services.acpid = {
+  services.acpid = lib.mkIf (!recoveryMode) {
     enable = true;
     handlers = {
       power = {
@@ -160,7 +173,7 @@
   # System Auto-Update & Maintenance
   # ---------------------------------------------------------
   system.autoUpgrade = {
-    enable = true;
+    enable = lib.mkDefault (!recoveryMode);
     flake = "github:rishabhroyy/nixconf";
     allowReboot = false; # Never randomly restart the host
     dates = "04:00";
