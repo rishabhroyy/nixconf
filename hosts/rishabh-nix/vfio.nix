@@ -19,6 +19,7 @@ in
     "kvm.report_ignored_msrs=0"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
+    "hugepages=24"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
@@ -59,7 +60,7 @@ in
       GUEST_NAME="$1"
       OPERATION="$2"
       SUB_OPERATION="$3"
-      HUGEPAGES_1G="16"
+      HUGEPAGES_1G="24"
       HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
       HOST_CPU_LIST="0-1,8-9"
       HOST_CPU_MASK="303"
@@ -74,18 +75,23 @@ in
               exit 1
           fi
 
-          echo 1 > /proc/sys/vm/compact_memory || true
-          echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
-
           ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
-          if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
+          ATTEMPT=1
+          while [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ] && [ "$ATTEMPT" -le 8 ]; do
+              echo 1 > /proc/sys/vm/compact_memory || true
+              echo 3 > /proc/sys/vm/drop_caches || true
               echo 1 > /proc/sys/vm/compact_memory || true
               echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
               ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
-          fi
+              if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
+                  sleep 1
+              fi
+              ATTEMPT=$((ATTEMPT + 1))
+          done
 
           if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
               echo "Failed to allocate $HUGEPAGES_1G 1G hugepages; only got $ALLOCATED" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
+              ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
               exit 1
           fi
       }

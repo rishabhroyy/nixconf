@@ -1,7 +1,7 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11</name>
-  <memory unit='KiB'>16777216</memory>
-  <currentMemory unit='KiB'>16777216</currentMemory>
+  <memory unit='KiB'>25165824</memory>
+  <currentMemory unit='KiB'>25165824</currentMemory>
   <memoryBacking>
     <hugepages>
       <page size='1' unit='G'/>
