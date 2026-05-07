@@ -450,25 +450,27 @@ in
       echo "xml: $XML_QEMU"
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         QEMU_OUT="$(${pkgs.coreutils}/bin/dirname "$(${pkgs.coreutils}/bin/dirname "$XML_QEMU")")"
+        echo "out: $QEMU_OUT"
         if [ -f "$QEMU_OUT/nix-support/ghost-qemu-patches" ]; then
+          echo "qemu-patched-derivation-marker=present"
           ${pkgs.coreutils}/bin/cat "$QEMU_OUT/nix-support/ghost-qemu-patches"
         else
           echo "qemu-patched-derivation-marker=missing"
         fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'failed to disable hypercall quirk'; then
-          echo "qemu-vmcall-patch=present"
+          echo "qemu-binary-vmcall-string=present"
         else
-          echo "qemu-vmcall-patch=missing"
+          echo "qemu-binary-vmcall-string=missing"
         fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'tsc-scaling-patch'; then
-          echo "qemu-tsc-frequency-log=present"
+          echo "qemu-binary-tsc-string=present"
         else
-          echo "qemu-tsc-frequency-log=missing"
+          echo "qemu-binary-tsc-string=missing"
         fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'qemu-acpi-oem-patch=ALASKA,A M I'; then
-          echo "qemu-acpi-oem=patched"
+          echo "qemu-binary-acpi-string=present"
         else
-          echo "qemu-acpi-oem=missing-marker"
+          echo "qemu-binary-acpi-string=missing"
         fi
       fi
       PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
