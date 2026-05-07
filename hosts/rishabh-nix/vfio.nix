@@ -495,7 +495,7 @@ in
 
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "win11 redefined. Secure Boot firmware/NVRAM XML:"
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'firmware|secure-boot|enrolled-keys|loader|nvram' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure' || true
       echo "Start the VM, then check Windows with: Confirm-SecureBootUEFI"
     '')
     (pkgs.writeShellScriptBin "free-win11-hugepages" ''
@@ -566,7 +566,7 @@ in
 
       echo
       echo "== OVMF / Secure Boot =="
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure-boot|firmware' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure' || true
 
       echo
       echo "== CPU / Hypervisor Masking =="
