@@ -110,25 +110,30 @@ static void check_cpuid()
 
     __cpuidex(regs, 1, 0);
     const bool hypervisor_bit = (regs[2] & (1 << 31)) != 0;
-    if (hypervisor_bit) {
-        add_finding("FAIL", "CPUID hypervisor bit", "ECX[31] is set");
-    } else {
-        add_finding("PASS", "CPUID hypervisor bit", "ECX[31] is clear");
-    }
 
     __cpuidex(regs, 0x40000000, 0);
     const unsigned int max_hv_leaf = static_cast<unsigned int>(regs[0]);
     const std::string hv_vendor = cpuid_leaf_vendor(0x40000000);
+    const std::string hv_low = lower(hv_vendor);
+    const bool microsoft_hv = hv_low.find("microsoft hv") != std::string::npos;
+
+    if (hypervisor_bit && microsoft_hv) {
+        add_finding("WARN", "CPUID hypervisor bit", "ECX[31] is set with Microsoft Hv; expected when Windows Hyper-V/VBS is active");
+    } else if (hypervisor_bit) {
+        add_finding("FAIL", "CPUID hypervisor bit", "ECX[31] is set without a Microsoft Hv context");
+    } else {
+        add_finding("PASS", "CPUID hypervisor bit", "ECX[31] is clear");
+    }
+
     if (max_hv_leaf >= 0x40000000 && trim(hv_vendor).size() > 0) {
         std::ostringstream detail;
         detail << "leaf 0x40000000 visible, vendor string='" << hv_vendor
                << "', max leaf=0x" << std::hex << max_hv_leaf;
-        const std::string hv_low = lower(hv_vendor);
         if (hv_low.find("kvm") != std::string::npos || hv_low.find("qemu") != std::string::npos ||
             hv_low.find("xen") != std::string::npos || hv_low.find("vmware") != std::string::npos) {
             add_finding("FAIL", "Hypervisor CPUID vendor", detail.str());
-        } else if (hv_low.find("microsoft hv") != std::string::npos) {
-            add_finding("WARN", "Hypervisor CPUID vendor", detail.str() + " (could be Windows Hyper-V/VBS)");
+        } else if (microsoft_hv) {
+            add_finding("WARN", "Hypervisor CPUID vendor", detail.str() + " (matches Microsoft Hyper-V/VBS)");
         } else {
             add_finding("WARN", "Hypervisor CPUID vendor", detail.str());
         }
@@ -590,7 +595,7 @@ static void check_registry_devices()
 {
     std::cout << "\n== Device / Registry VM Residue ==\n";
     static const std::vector<std::string> suspicious = {
-        "qemu", "bochs", "kvm", "virtio", "red hat", "spice", "qxl", "vioscsi",
+        "qemu", "bochs", "kvm", "virtio", "red hat", "spice", "qxldod", "vioscsi",
         "viostor", "netkvm", "balloon", "vdagent", "vmware", "virtualbox", "xen"
     };
 

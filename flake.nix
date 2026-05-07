@@ -50,6 +50,15 @@ static bool tsc_is_stable_and_known'
           substituteInPlace include/hw/acpi/aml-build.h \
             --replace-fail '#define ACPI_BUILD_APPNAME6 "BOCHS "' '#define ACPI_BUILD_APPNAME6 "ALASKA"' \
             --replace-fail '#define ACPI_BUILD_APPNAME8 "BXPC    "' '#define ACPI_BUILD_APPNAME8 "A M I   "'
+
+          QEMU0002_FILES="$(grep -R -l 'QEMU0002' hw include || true)"
+          if [ -z "$QEMU0002_FILES" ]; then
+            echo "QEMU0002 ACPI HID not found in QEMU source" >&2
+            exit 1
+          fi
+          for file in $QEMU0002_FILES; do
+            substituteInPlace "$file" --replace-fail 'QEMU0002' 'MSI0002'
+          done
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$out/nix-support"
@@ -57,6 +66,7 @@ static bool tsc_is_stable_and_known'
 qemu-vmcall-patch=present
 qemu-tsc-frequency-log=present
 qemu-acpi-oem=patched
+qemu-fwcfg-acpi-hid=MSI0002
 EOF
         '';
       });
