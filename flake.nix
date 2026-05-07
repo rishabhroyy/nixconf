@@ -90,8 +90,17 @@ static bool tsc_is_stable_and_known'
             --replace-fail 'k->device_id    = PCI_DEVICE_ID_REDHAT_XHCI;' 'k->device_id    = 0x149c;
     k->subsystem_vendor_id = 0x1462;
     k->subsystem_id = 0x7c37;'
+          SMBIOS_DIMM_SIZE_FILES="$(grep -R -l 'smbios_memory_device_size = 16 \* GiB' hw/i386 || true)"
+          if [ -z "$SMBIOS_DIMM_SIZE_FILES" ]; then
+            echo "No i386 SMBIOS 16 GiB memory device compatibility setting found" >&2
+            exit 1
+          fi
+          for file in $SMBIOS_DIMM_SIZE_FILES; do
+            substituteInPlace "$file" \
+              --replace-fail 'smbios_memory_device_size = 16 * GiB' 'smbios_memory_device_size = 8 * GiB'
+          done
+
           substituteInPlace hw/smbios/smbios.c \
-            --replace-fail '#define MAX_DIMM_SZ (16ll * ONE_GB)' '#define MAX_DIMM_SZ (8ll * ONE_GB)' \
             --replace-fail '    char loc_str[128];' '    char loc_str[128];
     char serial_str[128];
     char asset_str[128];' \
