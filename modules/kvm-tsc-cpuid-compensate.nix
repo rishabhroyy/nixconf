@@ -70,9 +70,10 @@ in
     environment.systemPackages = [
       (pkgs.writeShellScriptBin "enable-vanguard-rdtsc-patch" ''
         set -eu
+        ko="${kvmTscCpuidCompensate}/lib/modules/${config.boot.kernelPackages.kernel.modDirVersion}/misc/kvm-tsc-cpuid-compensate.ko"
 
         if [ ! -d /sys/module/kvm_tsc_cpuid_compensate ]; then
-          ${pkgs.kmod}/bin/modprobe kvm-tsc-cpuid-compensate \
+          ${pkgs.kmod}/bin/insmod "$ko" \
             enabled=1 \
             target_cycles=${toString cfg.targetCycles} \
             max_cycles=${toString cfg.maxCycles}
