@@ -219,7 +219,7 @@ in
         DST=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd
         MARKER=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.source.sha256
         SRC_HASH="$(${pkgs.coreutils}/bin/sha256sum "$SRC" | ${pkgs.gawk}/bin/awk '{ print $1 }')"
-        PATCH_ID="ovmf-acpi-identity-v1"
+        PATCH_ID="ovmf-bgrt-identity-v2"
 
         if [ -f "$DST" ] && [ -f "$MARKER" ] && [ "$(${pkgs.coreutils}/bin/cat "$MARKER")" = "$SRC_HASH $PATCH_ID" ]; then
           return
@@ -232,22 +232,25 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-data = path.read_bytes()
-replacements = [
-    (b"INTEL ", b"ALASKA"),
-    (b"EDK2    ", b"A M I   "),
-]
+data = bytearray(path.read_bytes())
+patched = 0
 
-counts = {}
-for old, new in replacements:
-    count = data.count(old)
-    counts[old.decode("latin1")] = count
-    if count == 0:
-        raise SystemExit(f"OVMF identity token {old!r} was not found")
-    data = data.replace(old, new)
+# ACPI table headers are 36 bytes:
+# signature[0:4], length[4:8], revision[8], checksum[9], OEMID[10:16],
+# OEMTableID[16:24].  Patch only embedded BGRT table/template headers.
+for pos in range(0, len(data) - 36):
+    if data[pos:pos + 4] != b"BGRT":
+        continue
+    if data[pos + 10:pos + 16] == b"INTEL " and data[pos + 16:pos + 24] == b"EDK2    ":
+        data[pos + 10:pos + 16] = b"ALASKA"
+        data[pos + 16:pos + 24] = b"A M I   "
+        patched += 1
+
+if patched == 0:
+    raise SystemExit("No BGRT ACPI header with OEMID='INTEL ' OEMTableID='EDK2    ' found in OVMF")
 
 path.write_bytes(data)
-print("Patched OVMF identity tokens: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
+print(f"Patched OVMF BGRT ACPI identity headers: {patched}")
 PY
         ${pkgs.coreutils}/bin/install -m 0644 "$DST.tmp" "$DST"
         ${pkgs.coreutils}/bin/rm -f "$DST.tmp"
