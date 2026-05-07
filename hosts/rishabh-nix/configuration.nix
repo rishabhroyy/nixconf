@@ -1,9 +1,8 @@
 { config, pkgs, inputs, lib, ... }:
 
 let
-  # Emergency boot profile. Keep this true until the host boots cleanly again.
-  # It disables VFIO, custom KVM/QEMU boot-time pieces, and auto VM definition.
-  recoveryMode = true;
+  # Flip this to true for a boring SSH/Tailscale-only rescue boot.
+  recoveryMode = false;
 in
 {
   imports = [
@@ -14,16 +13,6 @@ in
     ./vfio.nix
     ../../modules/kvm-hypercall-patch.nix
   ];
-
-  # Keep the default entry boring while we debug. This adds a separate boot menu
-  # entry that re-enables the VFIO/stealth stack with safer late device binding.
-  specialisation.vfio-test.configuration = {
-    imports = [
-      ./vfio.nix
-      ../../modules/kvm-hypercall-patch.nix
-    ];
-    system.nixos.tags = [ "vfio-test" ];
-  };
   
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
