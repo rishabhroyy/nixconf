@@ -59,6 +59,13 @@ static bool tsc_is_stable_and_known'
           for file in $QEMU0002_FILES; do
             substituteInPlace "$file" --replace-fail 'QEMU0002' 'MSI0002'
           done
+
+          substituteInPlace hw/pci-bridge/gen_pcie_root_port.c \
+            --replace-fail 'k->vendor_id = PCI_VENDOR_ID_REDHAT;' 'k->vendor_id = PCI_VENDOR_ID_AMD;' \
+            --replace-fail 'k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_RP;' 'k->device_id = 0x1483;'
+          substituteInPlace hw/pci-bridge/pcie_pci_bridge.c \
+            --replace-fail 'k->vendor_id = PCI_VENDOR_ID_REDHAT;' 'k->vendor_id = PCI_VENDOR_ID_AMD;' \
+            --replace-fail 'k->device_id = PCI_DEVICE_ID_REDHAT_PCIE_BRIDGE;' 'k->device_id = 0x1483;'
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$out/nix-support"
@@ -67,6 +74,7 @@ qemu-vmcall-patch=present
 qemu-tsc-frequency-log=present
 qemu-acpi-oem=patched
 qemu-fwcfg-acpi-hid=MSI0002
+qemu-pcie-bridge-ids=1022:1483
 EOF
         '';
       });

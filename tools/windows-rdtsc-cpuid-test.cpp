@@ -251,6 +251,59 @@ static void check_timing()
     add_finding("INFO", "Timing detail", detail.str());
 }
 
+static void check_cache_topology()
+{
+    std::cout << "\n== CPU Cache Topology ==\n";
+
+    DWORD length = 0;
+    if (GetLogicalProcessorInformationEx(RelationCache, nullptr, &length) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+        add_finding("WARN", "Cache topology", "could not query logical processor cache topology");
+        return;
+    }
+
+    std::vector<unsigned char> buffer(length);
+    auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+    if (!GetLogicalProcessorInformationEx(RelationCache, info, &length)) {
+        add_finding("WARN", "Cache topology", "GetLogicalProcessorInformationEx(RelationCache) failed");
+        return;
+    }
+
+    size_t offset = 0;
+    int l2_count = 0;
+    int l3_count = 0;
+    unsigned long long l3_total = 0;
+    while (offset < length) {
+        auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+        const auto& cache = entry->Cache;
+        std::cout << "L" << static_cast<int>(cache.Level)
+                  << " cache: size=" << cache.CacheSize / 1024
+                  << " KiB, line=" << cache.LineSize
+                  << ", associativity=" << static_cast<int>(cache.Associativity) << "\n";
+        if (cache.Level == 2) {
+            ++l2_count;
+        } else if (cache.Level == 3) {
+            ++l3_count;
+            l3_total += cache.CacheSize;
+        }
+        offset += entry->Size;
+    }
+
+    if (l3_count > 0) {
+        std::ostringstream cache_detail;
+        cache_detail << l3_count << " L3 cache object(s), total visible L3=" << l3_total / (1024 * 1024) << " MiB";
+        add_finding("PASS", "L3 cache topology", cache_detail.str());
+    } else {
+        add_finding("FAIL", "L3 cache topology", "no L3 cache objects visible to Windows");
+    }
+
+    if (l2_count > 0) {
+        add_finding("PASS", "L2 cache topology", std::to_string(l2_count) + " L2 cache object(s) visible");
+    } else {
+        add_finding("WARN", "L2 cache topology", "no L2 cache objects visible");
+    }
+}
+
 static DWORD provider_signature(char a, char b, char c, char d)
 {
     return (static_cast<DWORD>(static_cast<unsigned char>(a)) << 24) |
@@ -517,6 +570,22 @@ static void check_tpm_secure_boot()
     }
 }
 
+static void check_thermal_topology()
+{
+    std::cout << "\n== ACPI Thermal Topology ==\n";
+    const std::string thermal = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature | "
+        "Select-Object InstanceName,CurrentTemperature,CriticalTripPoint | Format-Table -AutoSize\" 2>$null");
+
+    if (!trim(thermal).empty()) {
+        std::cout << thermal << "\n";
+        add_finding("PASS", "ACPI thermal zones", "Windows WMI reports at least one ACPI thermal zone");
+    } else {
+        add_finding("WARN", "ACPI thermal zones", "no ACPI thermal zones reported through WMI");
+    }
+}
+
 static std::string reg_value_to_string(DWORD type, const std::vector<unsigned char>& data)
 {
     if ((type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ) && !data.empty()) {
@@ -595,14 +664,14 @@ static void check_registry_devices()
 {
     std::cout << "\n== Device / Registry VM Residue ==\n";
     static const std::vector<std::string> suspicious = {
-        "qemu", "bochs", "kvm", "virtio", "red hat", "spice", "qxldod", "vioscsi",
+        "qemu", "bochs", "kvm", "virtio", "red hat", "ven_1b36", "ven_1af4", "spice", "qxldod", "vioscsi",
         "viostor", "netkvm", "balloon", "vdagent", "vmware", "virtualbox", "xen"
     };
 
     const std::string present_devices = run_command(
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
         "\"Get-PnpDevice -PresentOnly | Where-Object { "
-        "$_.InstanceId -match 'QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|SPICE|QXL|VMWARE|VBOX|XEN' -or "
+        "$_.InstanceId -match 'QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|VEN_1B36|VEN_1AF4|SPICE|QXL|VMWARE|VBOX|XEN' -or "
         "$_.FriendlyName -match 'QEMU|BOCHS|KVM|VIRTIO|Red Hat|SPICE|QXL|VMware|VirtualBox|Xen' "
         "} | Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize\" 2>$null");
     if (!trim(present_devices).empty()) {
@@ -661,9 +730,11 @@ int main()
 
     check_cpuid();
     check_timing();
+    check_cache_topology();
     check_smbios();
     check_acpi();
     check_tpm_secure_boot();
+    check_thermal_topology();
     check_registry_devices();
     print_summary();
 

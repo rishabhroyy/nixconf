@@ -250,6 +250,31 @@ in
       enroll_secure_boot_keys_once
 
       mkdir -p /var/lib/libvirt/qemu/acpi
+      cat > /var/lib/libvirt/qemu/acpi/fake-thermal.asl <<'EOF'
+DefinitionBlock ("fake-thermal.aml", "SSDT", 2, "ALASKA", "A M I   ", 0x00000001)
+{
+    Scope (\_SB)
+    {
+        ThermalZone (TZ00)
+        {
+            Name (_TZP, 100)
+
+            Method (_TMP, 0, NotSerialized)
+            {
+                Return (3032)
+            }
+
+            Method (_CRT, 0, NotSerialized)
+            {
+                Return (3562)
+            }
+        }
+    }
+}
+EOF
+      ${pkgs.acpica-tools}/bin/iasl -ve -p /var/lib/libvirt/qemu/acpi/fake-thermal /var/lib/libvirt/qemu/acpi/fake-thermal.asl >/dev/null
+      chmod 644 /var/lib/libvirt/qemu/acpi/fake-thermal.aml
+
       for TABLE in FACP DSDT; do
         if [ -f "/sys/firmware/acpi/tables/$TABLE" ]; then
           cp "/sys/firmware/acpi/tables/$TABLE" "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
@@ -374,14 +399,16 @@ in
         export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
       fi
 
-      export QEMU_COMMANDLINE=""
+      export QEMU_COMMANDLINE="  <qemu:commandline>
+    <qemu:arg value='-acpitable'/>
+    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/fake-thermal.aml'/>"
       if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then
         if [ ! -f /var/lib/libvirt/qemu/acpi/FACP.bin ]; then
           echo "Legacy FACP spoofing is enabled, but /var/lib/libvirt/qemu/acpi/FACP.bin is missing"
           exit 1
         fi
 
-        QEMU_COMMANDLINE="  <qemu:commandline>
+        QEMU_COMMANDLINE="$QEMU_COMMANDLINE
     <qemu:arg value='-acpitable'/>
     <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/FACP.bin'/>"
 
@@ -396,9 +423,9 @@ in
     <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/DSDT.aml'/>"
         fi
 
-        QEMU_COMMANDLINE="$QEMU_COMMANDLINE
-  </qemu:commandline>"
       fi
+      QEMU_COMMANDLINE="$QEMU_COMMANDLINE
+  </qemu:commandline>"
       export QEMU_COMMANDLINE
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
@@ -430,6 +457,7 @@ in
     psmisc
     tpm2-tools
     python3Packages.virt-firmware
+    acpica-tools
     (pkgs.writeShellScriptBin "enable-win11-acpi-spoofing" ''
       set -eu
 
