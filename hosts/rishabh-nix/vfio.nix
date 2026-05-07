@@ -450,11 +450,10 @@ in
       echo "xml: $XML_QEMU"
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
-        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'ALASKA' &&
-           ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'A M I'; then
+        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'qemu-acpi-oem-patch=ALASKA,A M I'; then
           echo "qemu-acpi-oem=patched"
         else
-          echo "qemu-acpi-oem=missing-patch"
+          echo "qemu-acpi-oem=missing-marker"
         fi
       fi
       PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
