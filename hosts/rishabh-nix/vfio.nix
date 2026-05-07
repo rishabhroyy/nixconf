@@ -254,7 +254,12 @@ in
 
       dmi_value() {
         VALUE="$(${pkgs.dmidecode}/bin/dmidecode -s "$1" 2>/dev/null | ${pkgs.gnused}/bin/sed '/^$/d' | ${pkgs.coreutils}/bin/head -n1 || true)"
-        if [ -z "$VALUE" ] || [ "$VALUE" = "Not Specified" ] || [ "$VALUE" = "To Be Filled By O.E.M." ]; then
+        NORMALIZED="$(printf '%s' "$VALUE" | ${pkgs.coreutils}/bin/tr '[:upper:]' '[:lower:]')"
+        if [ -z "$VALUE" ] \
+          || [ "$NORMALIZED" = "not specified" ] \
+          || [ "$NORMALIZED" = "to be filled by o.e.m." ] \
+          || [ "$NORMALIZED" = "to be filled by oem" ] \
+          || [ "$NORMALIZED" = "default string" ]; then
           VALUE="$2"
         fi
         xml_escape "$VALUE"
@@ -300,10 +305,35 @@ in
       export CHASSIS_MANUFACTURER="$(dmi_value chassis-manufacturer "Micro-Star International Co., Ltd.")"
       export CHASSIS_VERSION="$(dmi_value chassis-version "1.0")"
       export CHASSIS_SERIAL="$(dmi_value chassis-serial-number "$RAW_SERIAL")"
-      export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "Default string")"
-      export CHASSIS_SKU="$(dmi_value chassis-sku-number "Default string")"
+      export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "$RAW_SERIAL")"
+      export CHASSIS_SKU="$(dmi_value chassis-sku-number "MS-7C37")"
       export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
+
+      if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then
+        export HYPERV_FEATURES=""
+        export SVM_FEATURE="    <feature policy='disable' name='svm'/>"
+        export HYPERVCLOCK_TIMER=""
+      else
+        export HYPERV_FEATURES="    <hyperv mode='custom'>
+      <relaxed state='on'/>
+      <vapic state='on'/>
+      <spinlocks state='on' retries='8191'/>
+      <vpindex state='off'/>
+      <runtime state='off'/>
+      <synic state='off'/>
+      <stimer state='off'/>
+      <reset state='off'/>
+      <vendor_id state='on' value='GenuineIntel'/>
+      <frequencies state='off'/>
+      <reenlightenment state='off'/>
+      <tlbflush state='off'/>
+      <ipi state='off'/>
+      <evmcs state='off'/>
+    </hyperv>"
+        export SVM_FEATURE="    <feature policy='require' name='svm'/>"
+        export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
+      fi
 
       export QEMU_COMMANDLINE=""
       if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then
@@ -334,7 +364,7 @@ in
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
       ${pkgs.envsubst}/bin/envsubst \
-        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $TSC_FREQUENCY_HZ $QEMU_SYSTEM_X86_64 $QEMU_COMMANDLINE' \
+        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $TSC_FREQUENCY_HZ $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
         < ${./win11-template.xml} > /tmp/win11-resolved.xml
 
       if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' /tmp/win11-resolved.xml; then
@@ -421,6 +451,53 @@ in
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
     '')
+    (pkgs.writeShellScriptBin "enable-win11-hyperv-features" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
+        exit 1
+      fi
+
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
+      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
+      echo "Windows Hyper-V/VBS support is enabled in the VM definition."
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|vendor_id|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
+    '')
+    (pkgs.writeShellScriptBin "disable-win11-hyperv-features" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
+        exit 1
+      fi
+
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/disable-win11-hyperv-features
+      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
+      echo "Windows Hyper-V/VBS support is disabled in the VM definition for A/B testing."
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|vendor_id|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
+    '')
+    (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running; shut it down before resetting its OVMF variables." >&2
+        exit 1
+      fi
+
+      NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
+      if [ -f "$NVRAM" ]; then
+        BACKUP="$NVRAM.backup.$(${pkgs.coreutils}/bin/date +%Y%m%d%H%M%S)"
+        ${pkgs.coreutils}/bin/cp -a "$NVRAM" "$BACKUP"
+        ${pkgs.coreutils}/bin/rm -f "$NVRAM"
+        echo "Backed up old OVMF variables to $BACKUP"
+      fi
+
+      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
+      echo "win11 redefined. Secure Boot firmware/NVRAM XML:"
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'firmware|secure-boot|enrolled-keys|loader|nvram' || true
+      echo "Start the VM, then check Windows with: Confirm-SecureBootUEFI"
+    '')
     (pkgs.writeShellScriptBin "free-win11-hugepages" ''
       set -eu
 
@@ -493,7 +570,13 @@ in
 
       echo
       echo "== CPU / Hypervisor Masking =="
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|hidden state='on'|vendor_id state='on'|timer name='hypervclock'|timer name='tsc'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
+      ${pkgs.coreutils}/bin/printf 'hyperv-feature-toggle='
+      if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then ${pkgs.coreutils}/bin/echo disabled; else ${pkgs.coreutils}/bin/echo enabled; fi
+      ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
+      if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q '<hyperv'; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
+      ${pkgs.coreutils}/bin/printf 'hypervclock-timer='
+      if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q "timer name='hypervclock'"; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
 
       echo
       echo "== TPM =="
