@@ -325,6 +325,34 @@ EOF
         xml_escape "$VALUE"
       }
 
+      memory_dmi_field() {
+        FIELD="$1"
+        ${pkgs.dmidecode}/bin/dmidecode -t 17 2>/dev/null | ${pkgs.gawk}/bin/awk -F: -v field="$FIELD" '
+          BEGIN { IGNORECASE = 1 }
+          $1 ~ "^[ \t]*" field "$" {
+            value = $2
+            sub(/^[ \t]+/, "", value)
+            sub(/[ \t]+$/, "", value)
+            low = tolower(value)
+            if (value != "" && low != "unknown" && low != "not specified" &&
+                low != "none" && low != "no module installed" &&
+                low !~ /qemu|bochs|kvm|vmware|virtualbox|xen/) {
+              print value
+              exit
+            }
+          }
+        '
+      }
+
+      qemu_smbios_value() {
+        printf '%s' "$1" | ${pkgs.gnused}/bin/sed \
+          -e 's/,/ /g' \
+          -e 's/&/\&amp;/g' \
+          -e 's/</\&lt;/g' \
+          -e 's/>/\&gt;/g' \
+          -e "s/'/\&apos;/g"
+      }
+
       detect_tsc_hz() {
         if [ -f /var/lib/libvirt/qemu/tsc-frequency-hz ]; then
           ${pkgs.coreutils}/bin/cat /var/lib/libvirt/qemu/tsc-frequency-hz
@@ -352,6 +380,23 @@ EOF
       DERIVED_SYSTEM_SERIAL="MSI$RAW_UUID_COMPACT"
       DERIVED_CHASSIS_SERIAL="$RAW_SERIAL-C"
       DERIVED_CHASSIS_ASSET="$RAW_SERIAL-A"
+      RAW_MEMORY_MANUFACTURER="$(memory_dmi_field Manufacturer)"
+      RAW_MEMORY_SERIAL="$(memory_dmi_field "Serial Number")"
+      RAW_MEMORY_PART="$(memory_dmi_field "Part Number")"
+      RAW_MEMORY_SPEED="$(${pkgs.dmidecode}/bin/dmidecode -t 17 2>/dev/null | ${pkgs.gawk}/bin/awk -F: '
+        /^[ \t]*Speed:/ {
+          value = $2
+          sub(/^[ \t]+/, "", value)
+          if (value ~ /^[0-9]+/) {
+            print int(value)
+            exit
+          }
+        }
+      ')"
+      if [ -z "$RAW_MEMORY_MANUFACTURER" ]; then RAW_MEMORY_MANUFACTURER="Micro-Star International Co. Ltd."; fi
+      if [ -z "$RAW_MEMORY_SERIAL" ]; then RAW_MEMORY_SERIAL="$RAW_SERIAL-M"; fi
+      if [ -z "$RAW_MEMORY_PART" ]; then RAW_MEMORY_PART="DDR4-3200"; fi
+      if [ -z "$RAW_MEMORY_SPEED" ] || [ "$RAW_MEMORY_SPEED" = "0" ]; then RAW_MEMORY_SPEED="3200"; fi
 
       export UUID="$(xml_escape "$RAW_UUID")"
       export SERIAL="$(xml_escape "$RAW_SERIAL")"
@@ -371,6 +416,10 @@ EOF
       export CHASSIS_SERIAL="$(dmi_value chassis-serial-number "$DERIVED_CHASSIS_SERIAL")"
       export CHASSIS_ASSET="$(dmi_value chassis-asset-tag "$DERIVED_CHASSIS_ASSET")"
       export CHASSIS_SKU="$(dmi_value chassis-sku-number "MS-7C37")"
+      export MEMORY_MANUFACTURER="$(qemu_smbios_value "$RAW_MEMORY_MANUFACTURER")"
+      export MEMORY_SERIAL="$(qemu_smbios_value "$RAW_MEMORY_SERIAL")"
+      export MEMORY_PART="$(qemu_smbios_value "$RAW_MEMORY_PART")"
+      export MEMORY_SPEED="$RAW_MEMORY_SPEED"
       export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
@@ -401,7 +450,9 @@ EOF
 
       export QEMU_COMMANDLINE="  <qemu:commandline>
     <qemu:arg value='-acpitable'/>
-    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/fake-thermal.aml'/>"
+    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/fake-thermal.aml'/>
+    <qemu:arg value='-smbios'/>
+    <qemu:arg value='type=17,loc_pfx=DIMM,bank=BANK,manufacturer=$MEMORY_MANUFACTURER,serial=$MEMORY_SERIAL,asset=$MEMORY_SERIAL,part=$MEMORY_PART,speed=$MEMORY_SPEED'/>"
       if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then
         if [ ! -f /var/lib/libvirt/qemu/acpi/FACP.bin ]; then
           echo "Legacy FACP spoofing is enabled, but /var/lib/libvirt/qemu/acpi/FACP.bin is missing"
@@ -665,6 +716,7 @@ EOF
       if [ -n "$PID" ]; then
         ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o 'tsc-frequency=[^, ]*' || true
         ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o -- '-acpitable file=[^ ]*' || true
+        ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o -- '-smbios type=17[^ ]*' || true
       fi
 
       echo

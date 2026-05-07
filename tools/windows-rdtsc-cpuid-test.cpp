@@ -638,7 +638,11 @@ static void check_network_macs()
     } else if (low_macs.find("08-00-27") != std::string::npos || low_macs.find("08:00:27") != std::string::npos) {
         add_finding("FAIL", "MAC Address", "Found default VirtualBox OUI (08:00:27)");
     } else if (low_macs.find("00-15-5d") != std::string::npos || low_macs.find("00:15:5d") != std::string::npos) {
-        add_finding("WARN", "MAC Address", "Found Hyper-V OUI (00:15:5D); verify this isn't a virtual switch leak");
+        if (low_macs.find("vethernet") != std::string::npos) {
+            add_finding("PASS", "MAC Address", "Hyper-V vEthernet adapter uses Microsoft OUI (00:15:5D), consistent with Windows Hyper-V/VBS");
+        } else {
+            add_finding("WARN", "MAC Address", "Found Hyper-V OUI (00:15:5D) on a non-vEthernet adapter; verify this is intentional");
+        }
     } else {
         add_finding("PASS", "MAC Address", "No default VM bridge OUIs detected");
     }
