@@ -348,6 +348,17 @@ EOF
           -e "s/'/\&apos;/g"
       }
 
+      valid_serial_value() {
+        VALUE="$1"
+        NORMALIZED="$(printf '%s' "$VALUE" | ${pkgs.coreutils}/bin/tr '[:upper:]' '[:lower:]' | ${pkgs.gnused}/bin/sed 's/[^a-z0-9]//g')"
+        [ -n "$NORMALIZED" ] &&
+          [ "$NORMALIZED" != "0" ] &&
+          [ "$NORMALIZED" != "00000000" ] &&
+          [ "$NORMALIZED" != "0000000000000000" ] &&
+          [ "$NORMALIZED" != "unknown" ] &&
+          [ "$NORMALIZED" != "none" ]
+      }
+
       detect_tsc_hz() {
         if [ -f /var/lib/libvirt/qemu/tsc-frequency-hz ]; then
           ${pkgs.coreutils}/bin/cat /var/lib/libvirt/qemu/tsc-frequency-hz
@@ -375,6 +386,7 @@ EOF
       DERIVED_SYSTEM_SERIAL="MSI$RAW_UUID_COMPACT"
       DERIVED_CHASSIS_SERIAL="$RAW_SERIAL-C"
       DERIVED_CHASSIS_ASSET="$RAW_SERIAL-A"
+      DERIVED_MEMORY_SERIAL="CMK$(${pkgs.coreutils}/bin/printf '%s' "$RAW_SERIAL$RAW_UUID_COMPACT" | ${pkgs.coreutils}/bin/tr -cd '[:alnum:]' | ${pkgs.coreutils}/bin/cut -c1-13)"
       RAW_MEMORY_MANUFACTURER="$(memory_dmi_field Manufacturer)"
       RAW_MEMORY_SERIAL="$(memory_dmi_field "Serial Number")"
       RAW_MEMORY_PART="$(memory_dmi_field "Part Number")"
@@ -389,7 +401,7 @@ EOF
         }
       ')"
       if [ -z "$RAW_MEMORY_MANUFACTURER" ]; then RAW_MEMORY_MANUFACTURER="Micro-Star International Co. Ltd."; fi
-      if [ -z "$RAW_MEMORY_SERIAL" ]; then RAW_MEMORY_SERIAL="$RAW_SERIAL-M"; fi
+      if ! valid_serial_value "$RAW_MEMORY_SERIAL"; then RAW_MEMORY_SERIAL="$DERIVED_MEMORY_SERIAL"; fi
       if [ -z "$RAW_MEMORY_PART" ]; then RAW_MEMORY_PART="DDR4-3200"; fi
       if [ -z "$RAW_MEMORY_SPEED" ] || [ "$RAW_MEMORY_SPEED" = "0" ]; then RAW_MEMORY_SPEED="3200"; fi
 
