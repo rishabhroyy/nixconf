@@ -125,9 +125,10 @@ static void check_cpuid()
                << "', max leaf=0x" << std::hex << max_hv_leaf;
         const std::string hv_low = lower(hv_vendor);
         if (hv_low.find("kvm") != std::string::npos || hv_low.find("qemu") != std::string::npos ||
-            hv_low.find("microsoft hv") != std::string::npos || hv_low.find("xen") != std::string::npos ||
-            hv_low.find("vmware") != std::string::npos) {
+            hv_low.find("xen") != std::string::npos || hv_low.find("vmware") != std::string::npos) {
             add_finding("FAIL", "Hypervisor CPUID vendor", detail.str());
+        } else if (hv_low.find("microsoft hv") != std::string::npos) {
+            add_finding("WARN", "Hypervisor CPUID vendor", detail.str() + " (could be Windows Hyper-V/VBS)");
         } else {
             add_finding("WARN", "Hypervisor CPUID vendor", detail.str());
         }
@@ -245,12 +246,12 @@ static void check_timing()
     add_finding("INFO", "Timing detail", detail.str());
 }
 
-static DWORD fourcc(char a, char b, char c, char d)
+static DWORD provider_signature(char a, char b, char c, char d)
 {
-    return static_cast<DWORD>(static_cast<unsigned char>(a)) |
-           (static_cast<DWORD>(static_cast<unsigned char>(b)) << 8) |
-           (static_cast<DWORD>(static_cast<unsigned char>(c)) << 16) |
-           (static_cast<DWORD>(static_cast<unsigned char>(d)) << 24);
+    return (static_cast<DWORD>(static_cast<unsigned char>(a)) << 24) |
+           (static_cast<DWORD>(static_cast<unsigned char>(b)) << 16) |
+           (static_cast<DWORD>(static_cast<unsigned char>(c)) << 8) |
+           static_cast<DWORD>(static_cast<unsigned char>(d));
 }
 
 static std::string printable_bytes(const unsigned char* data, size_t len)
@@ -321,7 +322,7 @@ static void print_smbios_field(const std::string& label, const std::string& valu
 static void check_smbios()
 {
     std::cout << "\n== SMBIOS / DMI ==\n";
-    const DWORD provider = fourcc('R', 'S', 'M', 'B');
+    const DWORD provider = provider_signature('R', 'S', 'M', 'B');
     const UINT size = GetSystemFirmwareTable(provider, 0, nullptr, 0);
     if (size == 0) {
         add_finding("FAIL", "SMBIOS", "GetSystemFirmwareTable(RSMB) returned no data");
@@ -396,7 +397,7 @@ static void check_smbios()
 static void check_acpi()
 {
     std::cout << "\n== ACPI Tables ==\n";
-    const DWORD provider = fourcc('A', 'C', 'P', 'I');
+    const DWORD provider = provider_signature('A', 'C', 'P', 'I');
     const UINT size = EnumSystemFirmwareTables(provider, nullptr, 0);
     if (size == 0) {
         add_finding("WARN", "ACPI", "EnumSystemFirmwareTables returned no table list");
@@ -592,6 +593,19 @@ static void check_registry_devices()
         "qemu", "bochs", "kvm", "virtio", "red hat", "spice", "qxl", "vioscsi",
         "viostor", "netkvm", "balloon", "vdagent", "vmware", "virtualbox", "xen"
     };
+
+    const std::string present_devices = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-PnpDevice -PresentOnly | Where-Object { "
+        "$_.InstanceId -match 'QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|SPICE|QXL|VMWARE|VBOX|XEN' -or "
+        "$_.FriendlyName -match 'QEMU|BOCHS|KVM|VIRTIO|Red Hat|SPICE|QXL|VMware|VirtualBox|Xen' "
+        "} | Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize\" 2>$null");
+    if (!trim(present_devices).empty()) {
+        std::cout << "Present suspicious PnP devices:\n" << present_devices << "\n";
+        add_finding("FAIL", "Present VM devices", "Windows currently reports suspicious QEMU/KVM/VirtIO-style devices");
+    } else {
+        add_finding("PASS", "Present VM devices", "Get-PnpDevice -PresentOnly found no obvious VM devices");
+    }
 
     int hits = 0;
     scan_registry_recursive(HKEY_LOCAL_MACHINE, "HARDWARE\\DESCRIPTION\\System", suspicious, 4, hits);
