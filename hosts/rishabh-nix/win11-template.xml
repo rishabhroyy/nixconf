@@ -207,4 +207,5 @@
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
   </devices>
+$QEMU_COMMANDLINE
 </domain>
