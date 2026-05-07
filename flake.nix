@@ -15,6 +15,25 @@
     # Applies qemu-vmcall-patch/changes.patch via the standard NixOS patches mechanism.
     qemuPatchedOverlay = final: prev:
     let
+      ovmfGhost = (prev.OVMF.override {
+        secureBoot = true;
+        tpmSupport = true;
+      }).overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace MdeModulePkg/MdeModulePkg.dec \
+            --replace-fail 'gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemId|"INTEL "|VOID*|0x30001034' \
+                           'gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemId|"ALASKA"|VOID*|0x30001034' \
+            --replace-fail 'gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x20202020324B4445|UINT64|0x30001035' \
+                           'gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x20202049204D2041|UINT64|0x30001035'
+        '';
+        postInstall = (old.postInstall or "") + ''
+          mkdir -p "$fd/nix-support"
+          cat > "$fd/nix-support/ghost-ovmf-patches" <<'EOF'
+ovmf-acpi-default-oem-id=ALASKA
+ovmf-acpi-default-oem-table-id=A M I
+EOF
+        '';
+      });
       applyGhostQemuPatches = pkg: pkg.overrideAttrs (old: {
         patches = (old.patches or []) ++ [ ./patches/qemu-disable-hypercall-quirk.patch ];
         postPatch = (old.postPatch or "") + ''
@@ -86,6 +105,7 @@ EOF
       });
     in {
       qemu_ghost = applyGhostQemuPatches prev.qemu_kvm;
+      ovmf_ghost = ovmfGhost;
     };
   in
   {

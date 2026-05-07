@@ -209,62 +209,9 @@ in
       chown root:root /var/lib/libvirt/qemu/6700xt.rom
       chmod 644 /var/lib/libvirt/qemu/6700xt.rom
 
-      if [ ! -f /run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd ]; then
-        echo "Missing Secure Boot OVMF firmware: /run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd"
-        exit 1
-      fi
-
-      prepare_patched_ovmf_code() {
-        SRC=/run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd
-        DST=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd
-        MARKER=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.source.sha256
-        SRC_HASH="$(${pkgs.coreutils}/bin/sha256sum "$SRC" | ${pkgs.gawk}/bin/awk '{ print $1 }')"
-        PATCH_ID="ovmf-acpi-pcd-identity-v3"
-
-        if [ -f "$DST" ] && [ -f "$MARKER" ] && [ "$(${pkgs.coreutils}/bin/cat "$MARKER")" = "$SRC_HASH $PATCH_ID" ]; then
-          return
-        fi
-
-        ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$DST")"
-        ${pkgs.coreutils}/bin/cp "$SRC" "$DST.tmp"
-        ${pkgs.python3}/bin/python3 - "$DST.tmp" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-data = path.read_bytes()
-
-# EDK2's BootGraphicsResourceTableDxe does not keep a finished BGRT table in
-# flash.  At runtime it fills BGRT's ACPI header from the platform defaults:
-# PcdAcpiDefaultOemId and PcdAcpiDefaultOemTableId.  Patch those exact ACPI-sized
-# default tokens in the VM-local OVMF copy so firmware-generated tables,
-# including BGRT, line up with the rest of the spoofed AMI/ALASKA ACPI surface.
-replacements = [
-    (b"INTEL ", b"ALASKA"),
-    (b"EDK2    ", b"A M I   "),
-]
-
-counts = {}
-for old, new in replacements:
-    count = data.count(old)
-    counts[old.decode("latin1")] = count
-    if count == 0:
-        raise SystemExit(f"OVMF ACPI default identity token {old!r} was not found")
-    data = data.replace(old, new)
-
-path.write_bytes(data)
-print("Patched OVMF ACPI default identity tokens: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
-PY
-        ${pkgs.coreutils}/bin/install -m 0644 "$DST.tmp" "$DST"
-        ${pkgs.coreutils}/bin/rm -f "$DST.tmp"
-        ${pkgs.coreutils}/bin/printf '%s %s\n' "$SRC_HASH" "$PATCH_ID" > "$MARKER"
-      }
-
-      prepare_patched_ovmf_code
-
       enroll_secure_boot_keys_once() {
         NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
-        TEMPLATE=/run/libvirt/nix-ovmf/edk2-i386-vars.fd
+        TEMPLATE=${pkgs.ovmf_ghost.variables}
         MARKER=/var/lib/libvirt/qemu/nvram/win11_VARS.fd.secureboot-enrolled
         INPUT="$NVRAM"
 
@@ -468,7 +415,8 @@ EOF
       export MEMORY_SERIAL="$(qemu_smbios_value "$RAW_MEMORY_SERIAL")"
       export MEMORY_PART="$(qemu_smbios_value "$RAW_MEMORY_PART")"
       export MEMORY_SPEED="$RAW_MEMORY_SPEED"
-      export OVMF_CODE="/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd"
+      export OVMF_CODE="${pkgs.ovmf_ghost.firmware}"
+      export OVMF_VARS="${pkgs.ovmf_ghost.variables}"
       export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
@@ -675,7 +623,7 @@ EOF
       fi
 
       NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
-      TEMPLATE=/run/libvirt/nix-ovmf/edk2-i386-vars.fd
+      TEMPLATE=${pkgs.ovmf_ghost.variables}
       INPUT="$NVRAM"
 
       if [ ! -f "$INPUT" ]; then
@@ -782,16 +730,18 @@ EOF
       OVMF_LOADER="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<loader[^>]*>\(.*\)</loader>.*:\1:p')"
       if [ -n "$OVMF_LOADER" ] && [ -f "$OVMF_LOADER" ]; then
         ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-copy='
-        case "$OVMF_LOADER" in
-          /var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd) ${pkgs.coreutils}/bin/echo present ;;
-          *) ${pkgs.coreutils}/bin/echo missing ;;
-        esac
-        ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-strings='
-        if ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'ALASKA' &&
-           ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'A M I'; then
-          ${pkgs.coreutils}/bin/echo patched
+        if [ "$OVMF_LOADER" = "${pkgs.ovmf_ghost.firmware}" ]; then
+          ${pkgs.coreutils}/bin/echo present
         else
-          ${pkgs.coreutils}/bin/echo missing-marker
+          ${pkgs.coreutils}/bin/echo missing
+        fi
+        OVMF_OUT="$(${pkgs.coreutils}/bin/dirname "$(${pkgs.coreutils}/bin/dirname "$OVMF_LOADER")")"
+        ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-derivation-marker='
+        if [ -f "$OVMF_OUT/nix-support/ghost-ovmf-patches" ]; then
+          ${pkgs.coreutils}/bin/echo patched
+          ${pkgs.coreutils}/bin/cat "$OVMF_OUT/nix-support/ghost-ovmf-patches"
+        else
+          ${pkgs.coreutils}/bin/echo missing
         fi
       fi
 
