@@ -39,6 +39,7 @@ static void set_v8086_seg'
 }
 
 static bool tsc_is_stable_and_known' '    if (env->tsc_khz) {
+        info_report_once("qemu-acpi-oem-patch=ALASKA,A M I");
         info_report("tsc-scaling-patch: guest TSC frequency set to %" PRId64 " kHz",
                     env->tsc_khz);
     }
@@ -50,9 +51,6 @@ static bool tsc_is_stable_and_known'
           substituteInPlace include/hw/acpi/aml-build.h \
             --replace-fail '#define ACPI_BUILD_APPNAME6 "BOCHS "' '#define ACPI_BUILD_APPNAME6 "ALASKA"' \
             --replace-fail '#define ACPI_BUILD_APPNAME8 "BXPC    "' '#define ACPI_BUILD_APPNAME8 "A M I   "'
-          printf '%s\n' \
-            'static const char qemu_acpi_oem_patch_marker[] __attribute__((used)) = "qemu-acpi-oem-patch=ALASKA,A M I";' \
-            >> target/i386/kvm/kvm.c
         '';
       });
     in {

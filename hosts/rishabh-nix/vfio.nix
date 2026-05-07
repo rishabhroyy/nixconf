@@ -468,6 +468,7 @@ in
       ${pkgs.coreutils}/bin/printf 'kvm-tsc-cpuid-compensate.enabled='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled 2>/dev/null || ${pkgs.coreutils}/bin/echo unloaded
       ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep 'qemu-acpi-oem-patch=ALASKA,A M I' || true
 
       echo
       echo "== OVMF / Secure Boot =="
