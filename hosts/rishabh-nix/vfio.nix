@@ -1,94 +1,14 @@
-{ config, pkgs, ... }:
+{ config, pkgs, lib, ... }:
 
 let
-  # Bind by exact PCI address at VM start. Do not use global vfio-pci.ids here:
-  # device IDs are not unique, and binding them in the initrd can steal a boot disk
-  # or host NIC before NixOS has mounted the root filesystem.
-  vfioDevices = [
-    "0000:2f:00.0" # RX 6700 XT GPU
-    "0000:2f:00.1" # RX 6700 XT audio
-    "0000:22:00.0" # Samsung 980 Pro NVMe for Windows
-    "0000:26:00.0" # ASMedia SATA controller for Windows game drive
-    "0000:2a:00.1" # USB controller 1
-    "0000:2a:00.3" # USB controller 2
-    "0000:29:00.0" # Realtek 2.5G NIC for Windows
-  ];
-  vfioDeviceList = builtins.concatStringsSep " " vfioDevices;
-  checkWin11VfioDevices = pkgs.writeShellScript "check-win11-vfio-devices" ''
-    set -eu
+  # The devices we want to pass through to the Windows 11 VM.
+  # Keep this on the known-working global binding path while we isolate the
+  # Vanguard-specific kernel changes.
+  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
 
-    mounted_names="$(${pkgs.util-linux}/bin/lsblk -rno NAME,PKNAME,MOUNTPOINT 2>/dev/null | ${pkgs.gawk}/bin/awk '$3 != "" { print $1; if ($2 != "") print $2 }' | ${pkgs.coreutils}/bin/sort -u)"
-
-    for bdf in ${vfioDeviceList}; do
-      sys="/sys/bus/pci/devices/$bdf"
-      if [ ! -e "$sys" ]; then
-        echo "$bdf missing"
-        continue
-      fi
-
-      driver="none"
-      if [ -L "$sys/driver" ]; then
-        driver="$(${pkgs.coreutils}/bin/basename "$(${pkgs.coreutils}/bin/readlink "$sys/driver")")"
-      fi
-
-      class="$(${pkgs.coreutils}/bin/cat "$sys/class" 2>/dev/null || true)"
-      vendor="$(${pkgs.coreutils}/bin/cat "$sys/vendor" 2>/dev/null || true)"
-      device="$(${pkgs.coreutils}/bin/cat "$sys/device" 2>/dev/null || true)"
-      echo "$bdf driver=$driver class=$class id=$vendor:$device"
-
-      for block_dir in $(${pkgs.findutils}/bin/find "$sys" -type d -path '*/block/*' 2>/dev/null || true); do
-        block="$(${pkgs.coreutils}/bin/basename "$block_dir")"
-        mounted="no"
-        if printf '%s\n' "$mounted_names" | ${pkgs.gnugrep}/bin/grep -qx "$block"; then
-          mounted="YES"
-        fi
-        echo "  block=$block mounted=$mounted"
-      done
-    done
-  '';
-  bindWin11VfioDevices = pkgs.writeShellScript "bind-win11-vfio-devices" ''
-    set -eu
-
-    ${pkgs.kmod}/bin/modprobe vfio-pci
-
-    mounted_names="$(${pkgs.util-linux}/bin/lsblk -rno NAME,PKNAME,MOUNTPOINT 2>/dev/null | ${pkgs.gawk}/bin/awk '$3 != "" { print $1; if ($2 != "") print $2 }' | ${pkgs.coreutils}/bin/sort -u)"
-
-    for bdf in ${vfioDeviceList}; do
-      sys="/sys/bus/pci/devices/$bdf"
-      if [ ! -e "$sys" ]; then
-        echo "Missing VFIO target $bdf" >&2
-        exit 1
-      fi
-
-      for block_dir in $(${pkgs.findutils}/bin/find "$sys" -type d -path '*/block/*' 2>/dev/null || true); do
-        block="$(${pkgs.coreutils}/bin/basename "$block_dir")"
-        if printf '%s\n' "$mounted_names" | ${pkgs.gnugrep}/bin/grep -qx "$block"; then
-          echo "Refusing to bind $bdf to vfio-pci because mounted block device $block is under it." >&2
-          exit 1
-        fi
-      done
-
-      echo vfio-pci > "$sys/driver_override"
-
-      if [ -L "$sys/driver" ]; then
-        current_driver="$(${pkgs.coreutils}/bin/basename "$(${pkgs.coreutils}/bin/readlink "$sys/driver")")"
-        if [ "$current_driver" != "vfio-pci" ]; then
-          echo "$bdf" > "$sys/driver/unbind"
-        fi
-      fi
-
-      echo "$bdf" > /sys/bus/pci/drivers_probe
-
-      new_driver="none"
-      if [ -L "$sys/driver" ]; then
-        new_driver="$(${pkgs.coreutils}/bin/basename "$(${pkgs.coreutils}/bin/readlink "$sys/driver")")"
-      fi
-      if [ "$new_driver" != "vfio-pci" ]; then
-        echo "Failed to bind $bdf to vfio-pci; current driver is $new_driver" >&2
-        exit 1
-      fi
-    done
-  '';
+  # This custom kernel patch is the riskiest host-boot delta from the Vanguard
+  # work. Re-enable only after the original VFIO stack is boring again.
+  enableTscExitCompensation = false;
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -103,9 +23,10 @@ in
     "kvm.report_ignored_msrs=0"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
+    ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
-  boot.kernelPatches = [
+  boot.kernelPatches = lib.optionals enableTscExitCompensation [
     {
       name = "kvm-tsc-exit-compensation";
       patch = ../../patches/linux-kvm-tsc-exit-compensation.patch;
@@ -115,9 +36,8 @@ in
   # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation)
   boot.extraModprobeConfig = "options kvm_amd nested=1";
 
-  # Load VFIO after root is mounted. VM devices are bound by exact PCI address
-  # in the libvirt hook instead of by global PCI ID in the initrd.
-  boot.kernelModules = [
+  # Load VFIO modules
+  boot.initrd.kernelModules = [
     "vfio_pci"
     "vfio"
     "vfio_iommu_type1"
@@ -234,7 +154,6 @@ in
 
           if [[ "$OPERATION" == "prepare" && "$SUB_OPERATION" == "begin" ]]; then
               allocate_hugepages
-              ${bindWin11VfioDevices}
               isolate_host_noise
           fi
           
@@ -410,12 +329,6 @@ in
     lsof
     psmisc
     tpm2-tools
-    (pkgs.writeShellScriptBin "check-win11-vfio-devices" ''
-      exec ${checkWin11VfioDevices} "$@"
-    '')
-    (pkgs.writeShellScriptBin "bind-win11-vfio-devices" ''
-      exec ${bindWin11VfioDevices} "$@"
-    '')
     (pkgs.writeShellScriptBin "free-win11-hugepages" ''
       set -eu
 
