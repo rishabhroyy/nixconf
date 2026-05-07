@@ -14,6 +14,16 @@ in
     ./vfio.nix
     ../../modules/kvm-hypercall-patch.nix
   ];
+
+  # Keep the default entry boring while we debug. This adds a separate boot menu
+  # entry that re-enables the VFIO/stealth stack with safer late device binding.
+  specialisation.vfio-test.configuration = {
+    imports = [
+      ./vfio.nix
+      ../../modules/kvm-hypercall-patch.nix
+    ];
+    system.nixos.tags = [ "vfio-test" ];
+  };
   
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
