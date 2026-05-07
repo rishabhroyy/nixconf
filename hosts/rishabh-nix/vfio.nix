@@ -1,21 +1,12 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, ... }:
 
 let
-  cfg = config.ghost.vfio;
-
   # The devices we want to pass through to the Windows 11 VM.
   # Keep this on the known-working global binding path while we isolate the
   # Vanguard-specific kernel changes.
   vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
 in
 {
-  options.ghost.vfio.tscExitCompensation.enable = lib.mkOption {
-    type = lib.types.bool;
-    default = true;
-    description = "Enable KVM TSC exit compensation for the Windows VFIO VM.";
-  };
-
-  config = {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
   boot.kernelParams = [
     "amd_iommu=on"
@@ -31,19 +22,8 @@ in
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
-  boot.kernelPatches = lib.optionals cfg.tscExitCompensation.enable [
-    {
-      name = "kvm-tsc-exit-compensation";
-      patch = ../../patches/linux-kvm-tsc-exit-compensation.patch;
-    }
-  ];
-
   # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation)
-  boot.extraModprobeConfig = ''
-    options kvm_amd nested=1
-  '' + lib.optionalString cfg.tscExitCompensation.enable ''
-    options kvm tsc_exit_compensation=1
-  '';
+  boot.extraModprobeConfig = "options kvm_amd nested=1";
 
   # Load VFIO modules
   boot.initrd.kernelModules = [
@@ -376,9 +356,9 @@ in
       echo
       echo "== TSC =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
-      ${pkgs.coreutils}/bin/printf 'kvm.tsc_exit_compensation='
-      ${pkgs.coreutils}/bin/cat /sys/module/kvm/parameters/tsc_exit_compensation 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
-      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'tsc-scaling-patch|tsc exit compensation active' || true
+      ${pkgs.coreutils}/bin/printf 'kvm-tsc-cpuid-compensate.enabled='
+      ${pkgs.coreutils}/bin/cat /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled 2>/dev/null || ${pkgs.coreutils}/bin/echo unloaded
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
 
       echo
       echo "== TPM =="
@@ -403,5 +383,4 @@ in
       ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
     '')
   ];
-  };
 }
