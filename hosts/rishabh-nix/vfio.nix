@@ -390,6 +390,7 @@ in
     lsof
     psmisc
     tpm2-tools
+    python3Packages.virt-firmware
     (pkgs.writeShellScriptBin "enable-win11-acpi-spoofing" ''
       set -eu
 
@@ -496,6 +497,48 @@ in
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "win11 redefined. Secure Boot firmware/NVRAM XML:"
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure' || true
+      echo "Start the VM, then check Windows with: Confirm-SecureBootUEFI"
+    '')
+    (pkgs.writeShellScriptBin "enroll-win11-secureboot-keys" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running; shut it down before enrolling OVMF Secure Boot keys." >&2
+        exit 1
+      fi
+
+      NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
+      TEMPLATE=/run/libvirt/nix-ovmf/edk2-i386-vars.fd
+      INPUT="$NVRAM"
+
+      if [ ! -f "$INPUT" ]; then
+        if [ ! -f "$TEMPLATE" ]; then
+          echo "No existing win11 NVRAM and no template at $TEMPLATE" >&2
+          exit 1
+        fi
+        INPUT="$TEMPLATE"
+      fi
+
+      ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$NVRAM")"
+      TMP="$NVRAM.secboot.tmp"
+      BACKUP="$NVRAM.backup.$(${pkgs.coreutils}/bin/date +%Y%m%d%H%M%S)"
+
+      if [ -f "$NVRAM" ]; then
+        ${pkgs.coreutils}/bin/cp -a "$NVRAM" "$BACKUP"
+        echo "Backed up old OVMF variables to $BACKUP"
+      fi
+
+      ${pkgs.python3Packages.virt-firmware}/bin/virt-fw-vars \
+        --input "$INPUT" \
+        --output "$TMP" \
+        --enroll-redhat \
+        --secure-boot
+
+      ${pkgs.coreutils}/bin/install -m 0600 "$TMP" "$NVRAM"
+      ${pkgs.coreutils}/bin/rm -f "$TMP"
+
+      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
+      echo "Enrolled Secure Boot keys into $NVRAM"
       echo "Start the VM, then check Windows with: Confirm-SecureBootUEFI"
     '')
     (pkgs.writeShellScriptBin "free-win11-hugepages" ''
