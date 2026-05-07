@@ -1,7 +1,7 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11</name>
-  <memory unit='KiB'>25165824</memory>
-  <currentMemory unit='KiB'>25165824</currentMemory>
+  <memory unit='KiB'>16777216</memory>
+  <currentMemory unit='KiB'>16777216</currentMemory>
   <memoryBacking>
     <hugepages>
       <page size='1' unit='G'/>
@@ -193,7 +193,7 @@
     <memballoon model='none'/>
 
     <!-- Physical TPM 2.0 passthrough via the kernel TPM resource manager -->
-    <tpm model='tpm-crb'>
+    <tpm model='tpm-tis'>
       <backend type='passthrough'>
         <device path='/dev/tpmrm0'/>
       </backend>
