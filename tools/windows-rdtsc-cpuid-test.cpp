@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -73,6 +74,27 @@ static unsigned long long percentile(std::vector<unsigned long long> values, dou
     std::sort(values.begin(), values.end());
     size_t idx = static_cast<size_t>((values.size() - 1) * p);
     return values[idx];
+}
+
+static std::vector<std::string> split_lines(const std::string& text)
+{
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        lines.push_back(trim(line));
+    }
+    return lines;
+}
+
+static unsigned int popcount64(unsigned long long value)
+{
+    unsigned int count = 0;
+    while (value) {
+        value &= value - 1;
+        ++count;
+    }
+    return count;
 }
 
 static std::string cpuid_vendor()
@@ -162,11 +184,44 @@ static void check_cpuid()
     }
 }
 
+struct TimingStats {
+    unsigned long long median = 0;
+    unsigned long long p95 = 0;
+    unsigned long long p99 = 0;
+    unsigned long long avg = 0;
+    unsigned long long min = 0;
+    unsigned long long max = 0;
+};
+
+static TimingStats summarize_timing(const std::vector<unsigned long long>& values)
+{
+    TimingStats stats;
+    auto minmax = std::minmax_element(values.begin(), values.end());
+    auto sum = std::accumulate(values.begin(), values.end(), 0ull);
+    stats.median = median(values);
+    stats.p95 = percentile(values, 0.95);
+    stats.p99 = percentile(values, 0.99);
+    stats.avg = sum / values.size();
+    stats.min = *minmax.first;
+    stats.max = *minmax.second;
+    return stats;
+}
+
+static void print_timing_stats(const std::string& label, const TimingStats& stats)
+{
+    std::cout << label
+              << " median=" << stats.median
+              << " p95=" << stats.p95
+              << " p99=" << stats.p99
+              << " avg=" << stats.avg
+              << " min/max=" << stats.min << "/" << stats.max << "\n";
+}
+
 static void check_timing()
 {
     std::cout << "\n== RDTSC / VM-exit Timing ==\n";
 
-    constexpr int iterations = 20000;
+    constexpr int iterations = 12000;
     std::vector<unsigned long long> rdtsc_delta;
     std::vector<unsigned long long> cpuid0_delta;
     std::vector<unsigned long long> cpuid1_delta;
@@ -215,25 +270,19 @@ static void check_timing()
         cpuid_hv_delta.push_back(end - start);
     }
 
-    auto print_stats = [](const std::string& label, const std::vector<unsigned long long>& values) {
-        auto minmax = std::minmax_element(values.begin(), values.end());
-        auto sum = std::accumulate(values.begin(), values.end(), 0ull);
-        std::cout << label
-                  << " median=" << median(values)
-                  << " p95=" << percentile(values, 0.95)
-                  << " p99=" << percentile(values, 0.99)
-                  << " avg=" << (sum / values.size())
-                  << " min/max=" << *minmax.first << "/" << *minmax.second << "\n";
-    };
+    const auto rdtsc_stats = summarize_timing(rdtsc_delta);
+    const auto cpuid0_stats = summarize_timing(cpuid0_delta);
+    const auto cpuid1_stats = summarize_timing(cpuid1_delta);
+    const auto cpuid_hv_stats = summarize_timing(cpuid_hv_delta);
 
-    print_stats("RDTSC->RDTSC", rdtsc_delta);
-    print_stats("RDTSC+CPUID(0)", cpuid0_delta);
-    print_stats("RDTSC+CPUID(1)", cpuid1_delta);
-    print_stats("RDTSC+CPUID(0x40000000)", cpuid_hv_delta);
+    print_timing_stats("CPU0 RDTSC->RDTSC", rdtsc_stats);
+    print_timing_stats("CPU0 RDTSC+CPUID(0)", cpuid0_stats);
+    print_timing_stats("CPU0 RDTSC+CPUID(1)", cpuid1_stats);
+    print_timing_stats("CPU0 RDTSC+CPUID(0x40000000)", cpuid_hv_stats);
 
-    const auto cpuid0_med = median(cpuid0_delta);
-    const auto cpuid0_p95 = percentile(cpuid0_delta, 0.95);
-    const auto cpuid0_p99 = percentile(cpuid0_delta, 0.99);
+    const auto cpuid0_med = cpuid0_stats.median;
+    const auto cpuid0_p95 = cpuid0_stats.p95;
+    const auto cpuid0_p99 = cpuid0_stats.p99;
     if (cpuid0_med < 500 && cpuid0_p95 < 800) {
         add_finding("PASS", "CPUID timing", "median and p95 are in the intended low-latency range");
     } else if (cpuid0_med < 800 && cpuid0_p95 < 1500) {
@@ -249,6 +298,105 @@ static void check_timing()
     std::ostringstream detail;
     detail << "CPUID(0) median/p95/p99 = " << cpuid0_med << "/" << cpuid0_p95 << "/" << cpuid0_p99 << " cycles";
     add_finding("INFO", "Timing detail", detail.str());
+
+    const DWORD logical_count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (logical_count > 0 && logical_count <= 64) {
+        std::cout << "\nPer-logical-CPU CPUID(0) timing sweep:\n";
+        unsigned long long worst_p95 = 0;
+        unsigned long long worst_p99 = 0;
+        DWORD worst_cpu = 0;
+        for (DWORD cpu = 0; cpu < logical_count; ++cpu) {
+            SetThreadAffinityMask(GetCurrentThread(), 1ull << cpu);
+            std::vector<unsigned long long> samples;
+            samples.reserve(3000);
+            for (int i = 0; i < 3000; ++i) {
+                int cpu_info[4];
+                _mm_lfence();
+                unsigned long long start = __rdtsc();
+                __cpuid(cpu_info, 0);
+                _mm_lfence();
+                unsigned long long end = __rdtsc();
+                _mm_lfence();
+                samples.push_back(end - start);
+            }
+            const auto stats = summarize_timing(samples);
+            std::cout << "logical CPU " << std::setw(2) << cpu
+                      << ": median=" << stats.median
+                      << " p95=" << stats.p95
+                      << " p99=" << stats.p99
+                      << " max=" << stats.max << "\n";
+            if (stats.p95 > worst_p95 || (stats.p95 == worst_p95 && stats.p99 > worst_p99)) {
+                worst_p95 = stats.p95;
+                worst_p99 = stats.p99;
+                worst_cpu = cpu;
+            }
+        }
+        SetThreadAffinityMask(GetCurrentThread(), 1ull);
+
+        std::ostringstream sweep;
+        sweep << "worst logical CPU " << worst_cpu << " p95/p99=" << worst_p95 << "/" << worst_p99 << " cycles";
+        if (worst_p95 < 800) {
+            add_finding("PASS", "Per-CPU timing sweep", sweep.str());
+        } else if (worst_p95 < 1500) {
+            add_finding("WARN", "Per-CPU timing sweep", sweep.str() + "; shared host cores may be noisy");
+        } else {
+            add_finding("FAIL", "Per-CPU timing sweep", sweep.str() + "; one or more vCPUs still look VM-exit-like");
+        }
+    } else {
+        add_finding("WARN", "Per-CPU timing sweep", "skipped because processor count is outside the simple affinity-mask path");
+    }
+}
+
+static void check_processor_topology()
+{
+    std::cout << "\n== CPU Core / Thread Topology ==\n";
+
+    DWORD logical_count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    std::cout << "Active logical processors: " << logical_count << "\n";
+
+    DWORD length = 0;
+    if (GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &length) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || length == 0) {
+        add_finding("WARN", "Processor topology", "could not query processor core topology");
+        return;
+    }
+
+    std::vector<unsigned char> buffer(length);
+    auto* info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length)) {
+        add_finding("WARN", "Processor topology", "GetLogicalProcessorInformationEx(RelationProcessorCore) failed");
+        return;
+    }
+
+    size_t offset = 0;
+    int core_count = 0;
+    unsigned int visible_threads = 0;
+    bool smt_pair_problem = false;
+    while (offset < length) {
+        auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+        ++core_count;
+        unsigned int core_threads = 0;
+        for (WORD i = 0; i < entry->Processor.GroupCount; ++i) {
+            core_threads += popcount64(entry->Processor.GroupMask[i].Mask);
+        }
+        visible_threads += core_threads;
+        std::cout << "Core " << std::setw(2) << (core_count - 1) << ": " << core_threads << " thread(s)\n";
+        if (core_threads != 2) {
+            smt_pair_problem = true;
+        }
+        offset += entry->Size;
+    }
+
+    if (core_count == 8 && visible_threads == 16 && !smt_pair_problem) {
+        add_finding("PASS", "Processor topology", "Windows sees expected Ryzen 7 5800X shape: 8 cores / 16 threads");
+    } else {
+        std::ostringstream detail;
+        detail << "Windows sees " << core_count << " cores / " << visible_threads << " threads";
+        if (smt_pair_problem) {
+            detail << ", with at least one non-2-thread core";
+        }
+        add_finding("WARN", "Processor topology", detail.str() + "; expected 8 cores / 16 threads");
+    }
 }
 
 static void check_cache_topology()
@@ -289,16 +437,20 @@ static void check_cache_topology()
         offset += entry->Size;
     }
 
-    if (l3_count > 0) {
+    if (l3_count == 1 && l3_total == 32ull * 1024ull * 1024ull) {
+        add_finding("PASS", "L3 cache topology", "1 L3 cache object, total visible L3=32 MiB");
+    } else if (l3_count > 0) {
         std::ostringstream cache_detail;
         cache_detail << l3_count << " L3 cache object(s), total visible L3=" << l3_total / (1024 * 1024) << " MiB";
-        add_finding("PASS", "L3 cache topology", cache_detail.str());
+        add_finding("WARN", "L3 cache topology", cache_detail.str() + "; expected one shared 32 MiB L3 for 5800X");
     } else {
         add_finding("FAIL", "L3 cache topology", "no L3 cache objects visible to Windows");
     }
 
-    if (l2_count > 0) {
-        add_finding("PASS", "L2 cache topology", std::to_string(l2_count) + " L2 cache object(s) visible");
+    if (l2_count == 8) {
+        add_finding("PASS", "L2 cache topology", "8 L2 cache object(s) visible, matching 8 exposed cores");
+    } else if (l2_count > 0) {
+        add_finding("WARN", "L2 cache topology", std::to_string(l2_count) + " L2 cache object(s) visible; expected 8");
     } else {
         add_finding("WARN", "L2 cache topology", "no L2 cache objects visible");
     }
@@ -402,6 +554,9 @@ static void check_smbios()
     size_t remaining = buffer.size() - 8;
     int suspicious_count = 0;
     int weak_count = 0;
+    int memory_devices = 0;
+    int memory_zero_serials = 0;
+    std::set<std::string> memory_serials;
 
     while (remaining >= 4) {
         const unsigned char type = data[0];
@@ -431,9 +586,17 @@ static void check_smbios()
             print_smbios_field("Chassis serial", smbios_string(strings, data[7]), suspicious_count, weak_count);
             print_smbios_field("Chassis asset", smbios_string(strings, data[8]), suspicious_count, weak_count);
         } else if (type == 17 && len >= 0x1B) {
+            ++memory_devices;
+            const std::string memory_serial = smbios_string(strings, data[0x18]);
             print_smbios_field("Memory Manufacturer", smbios_string(strings, data[0x17]), suspicious_count, weak_count);
-            print_smbios_field("Memory Serial", smbios_string(strings, data[0x18]), suspicious_count, weak_count);
+            print_smbios_field("Memory Serial", memory_serial, suspicious_count, weak_count);
             print_smbios_field("Memory Part", smbios_string(strings, data[0x1A]), suspicious_count, weak_count);
+            const std::string serial_low = lower(trim(memory_serial));
+            if (serial_low.empty() || serial_low == "00000000" || serial_low == "0000000000000000") {
+                ++memory_zero_serials;
+            } else {
+                memory_serials.insert(serial_low);
+            }
         }
 
         size_t next = len;
@@ -453,6 +616,18 @@ static void check_smbios()
     }
     if (weak_count == 0) {
         add_finding("PASS", "SMBIOS placeholders", "no common placeholder values in reported fields");
+    }
+    if (memory_devices >= 1 && memory_zero_serials == 0) {
+        add_finding("PASS", "SMBIOS memory devices", std::to_string(memory_devices) + " memory device record(s), no blank/zeroed serials");
+    } else if (memory_devices >= 1) {
+        add_finding("WARN", "SMBIOS memory devices", std::to_string(memory_zero_serials) + " memory device record(s) have blank/zeroed serials");
+    } else {
+        add_finding("WARN", "SMBIOS memory devices", "no SMBIOS Type 17 memory device records found");
+    }
+    if (memory_serials.size() >= 2 || memory_devices <= 1) {
+        add_finding("PASS", "SMBIOS memory serial diversity", "memory serials are not all collapsed to one repeated value");
+    } else if (memory_devices > 1 && memory_zero_serials == 0) {
+        add_finding("WARN", "SMBIOS memory serial diversity", "multiple memory records appear to share the same serial");
     }
 }
 
@@ -477,6 +652,8 @@ static void check_acpi()
     };
 
     int suspicious_hits = 0;
+    int ami_identity = 0;
+    int bgrt_ok = 0;
     for (DWORD id : ids) {
         const UINT table_size = GetSystemFirmwareTable(provider, id, nullptr, 0);
         if (table_size == 0) {
@@ -492,6 +669,15 @@ static void check_acpi()
         const std::string oem_table = table.size() >= 24 ? printable_bytes(table.data() + 16, 8) : "";
         std::cout << std::left << std::setw(6) << sig << " OEMID='" << oem_id << "' OEMTableID='" << oem_table << "'\n";
 
+        if (oem_id == "ALASKA" && oem_table == "A M I   ") {
+            ++ami_identity;
+            if (sig == "BGRT") {
+                ++bgrt_ok;
+            }
+        } else if (sig != "SSDT") {
+            add_finding("WARN", "ACPI " + sig + " identity", "OEMID/OEMTableID differ from ALASKA/A M I");
+        }
+
         const std::string bytes(reinterpret_cast<const char*>(table.data()), table.size());
         std::string matched;
         if (contains_any(bytes, suspicious, &matched)) {
@@ -502,6 +688,16 @@ static void check_acpi()
 
     if (suspicious_hits == 0) {
         add_finding("PASS", "ACPI virtualization strings", "no obvious QEMU/BOCHS/BXPC/KVM strings found");
+    }
+    if (bgrt_ok > 0) {
+        add_finding("PASS", "ACPI BGRT identity", "BGRT reports ALASKA/A M I");
+    } else {
+        add_finding("WARN", "ACPI BGRT identity", "BGRT was not found with ALASKA/A M I identity");
+    }
+    if (ami_identity >= 6) {
+        add_finding("PASS", "ACPI OEM consistency", std::to_string(ami_identity) + " ACPI table(s) use ALASKA/A M I identity");
+    } else {
+        add_finding("WARN", "ACPI OEM consistency", "few ACPI tables use the expected ALASKA/A M I identity");
     }
 }
 
@@ -535,6 +731,17 @@ static bool powershell_field_true(const std::string& text, const std::string& fi
     return low.substr(pos, end - pos).find("true") != std::string::npos;
 }
 
+static bool bcd_option_yes(const std::string& bcd, const std::string& option)
+{
+    for (const auto& line : split_lines(bcd)) {
+        const std::string low_line = lower(line);
+        if (low_line.find(lower(option)) == 0 && low_line.find("yes") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void check_tpm_secure_boot()
 {
     std::cout << "\n== TPM 2.0 / Secure Boot ==\n";
@@ -556,7 +763,7 @@ static void check_tpm_secure_boot()
         add_finding("WARN", "Secure Boot", "could not read SecureBoot registry state");
     }
 
-    const std::string tpm = run_command("powershell -NoProfile -ExecutionPolicy Bypass -Command \"Get-Tpm | Format-List TpmPresent,TpmReady,TpmEnabled,TpmActivated,TpmOwned,ManufacturerIdTxt,ManufacturerVersionFull20\" 2>$null");
+    const std::string tpm = run_command("powershell -NoProfile -ExecutionPolicy Bypass -Command \"Get-Tpm | Format-List TpmPresent,TpmReady,TpmEnabled,TpmActivated,TpmOwned,ManufacturerIdTxt,ManufacturerVersionFull20\" 2>NUL");
     if (trim(tpm).empty()) {
         add_finding("WARN", "TPM", "Get-Tpm produced no output");
         return;
@@ -574,13 +781,82 @@ static void check_tpm_secure_boot()
     }
 }
 
+static void check_windows_security_state()
+{
+    std::cout << "\n== Windows Security / Boot State ==\n";
+
+    const std::string bcd = run_command("bcdedit /enum 2>NUL");
+    if (!trim(bcd).empty()) {
+        std::cout << bcd << "\n";
+        const std::string low_bcd = lower(bcd);
+        if (bcd_option_yes(bcd, "testsigning")) {
+            add_finding("FAIL", "BCD testsigning", "testsigning is enabled");
+        } else {
+            add_finding("PASS", "BCD testsigning", "no enabled testsigning flag found");
+        }
+        if (bcd_option_yes(bcd, "debug")) {
+            add_finding("FAIL", "BCD kernel debugging", "kernel debugging is enabled");
+        } else {
+            add_finding("PASS", "BCD kernel debugging", "no enabled kernel debugging flag found");
+        }
+        if (low_bcd.find("hypervisorlaunchtype") != std::string::npos) {
+            add_finding("PASS", "BCD Hyper-V launch", "hypervisorlaunchtype is present for guest Hyper-V/VBS context");
+        } else {
+            add_finding("INFO", "BCD Hyper-V launch", "hypervisorlaunchtype was not shown in bcdedit output");
+        }
+    } else {
+        add_finding("WARN", "BCD state", "bcdedit produced no output");
+    }
+
+    const std::string dg = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-CimInstance -ClassName Win32_DeviceGuard | "
+        "Select-Object SecurityServicesConfigured,SecurityServicesRunning,VirtualizationBasedSecurityStatus,"
+        "RequiredSecurityProperties,AvailableSecurityProperties | Format-List\" 2>NUL");
+    if (!trim(dg).empty()) {
+        std::cout << dg << "\n";
+        add_finding("PASS", "Device Guard / VBS query", "Win32_DeviceGuard data is available for manual review");
+    } else {
+        add_finding("WARN", "Device Guard / VBS query", "Win32_DeviceGuard query returned no data");
+    }
+}
+
+static void check_vanguard_services()
+{
+    std::cout << "\n== Vanguard Service State ==\n";
+    const std::string services = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-Service -Name vgk,vgc -ErrorAction SilentlyContinue | "
+        "Select-Object Name,Status,StartType,ServiceType | Format-Table -AutoSize; "
+        "Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'vgk' } | "
+        "Select-Object Name,State,Started,StartMode,PathName | Format-List\" 2>NUL");
+
+    if (trim(services).empty()) {
+        add_finding("INFO", "Vanguard services", "vgk/vgc are not installed or not visible yet");
+        return;
+    }
+
+    std::cout << services << "\n";
+    const std::string low_services = lower(services);
+    if (low_services.find("vgk") != std::string::npos) {
+        add_finding("PASS", "Vanguard kernel driver visibility", "vgk is present in Windows service/driver inventory");
+    } else {
+        add_finding("WARN", "Vanguard kernel driver visibility", "vgk was not present in service/driver output");
+    }
+    if (low_services.find("vgc") != std::string::npos) {
+        add_finding("PASS", "Vanguard user service visibility", "vgc is present in Windows service inventory");
+    } else {
+        add_finding("INFO", "Vanguard user service visibility", "vgc was not present in service output");
+    }
+}
+
 static void check_thermal_topology()
 {
     std::cout << "\n== ACPI Thermal Topology ==\n";
     const std::string thermal = run_command(
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
         "\"Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature | "
-        "Select-Object InstanceName,CurrentTemperature,CriticalTripPoint | Format-Table -AutoSize\" 2>$null");
+        "Select-Object InstanceName,CurrentTemperature,CriticalTripPoint | Format-Table -AutoSize\" 2>NUL");
 
     if (!trim(thermal).empty()) {
         std::cout << thermal << "\n";
@@ -590,12 +866,34 @@ static void check_thermal_topology()
     }
 }
 
+static void check_memory_and_pagefile()
+{
+    std::cout << "\n== Memory / Pagefile ==\n";
+    const std::string mem = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory | Format-List; "
+        "Get-CimInstance Win32_PageFileUsage | Select-Object Name,AllocatedBaseSize,CurrentUsage,PeakUsage | Format-Table -AutoSize\" 2>NUL");
+
+    if (trim(mem).empty()) {
+        add_finding("WARN", "Guest memory", "could not query Windows memory/pagefile state");
+        return;
+    }
+    std::cout << mem << "\n";
+
+    const std::string low_mem = lower(mem);
+    if (low_mem.find("totalphysicalmemory") != std::string::npos) {
+        add_finding("PASS", "Guest memory query", "Windows reports guest physical memory");
+    } else {
+        add_finding("WARN", "Guest memory query", "TotalPhysicalMemory was not present in WMI output");
+    }
+}
+
 static void check_physical_disks()
 {
     std::cout << "\n== Physical Disks ==\n";
     const std::string disks = run_command(
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"Get-PhysicalDisk | Select-Object FriendlyName, SerialNumber | Format-Table -AutoSize\" 2>$null");
+        "\"Get-PhysicalDisk | Select-Object FriendlyName, SerialNumber | Format-Table -AutoSize\" 2>NUL");
 
     if (trim(disks).empty()) {
         add_finding("WARN", "Physical Disks", "Could not query physical disks via PowerShell");
@@ -619,12 +917,54 @@ static void check_physical_disks()
     }
 }
 
+static void check_pci_identity()
+{
+    std::cout << "\n== PCI / Device Identity ==\n";
+    const std::string pci = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like 'PCI\\*' } | "
+        "Select-Object Class,FriendlyName,InstanceId | Format-Table -AutoSize\" 2>NUL");
+
+    if (trim(pci).empty()) {
+        add_finding("WARN", "PCI inventory", "could not query present PCI devices");
+        return;
+    }
+    std::cout << pci << "\n";
+
+    static const std::vector<std::string> suspicious = {
+        "VEN_1B36", "VEN_1AF4", "VEN_QEMU", "VEN_REDHAT", "QEMU", "VirtIO", "Red Hat", "Bochs", "SPICE", "QXL"
+    };
+    std::string matched;
+    if (contains_any(pci, suspicious, &matched)) {
+        add_finding("FAIL", "Present PCI identity", "present PCI inventory contains virtualization marker '" + matched + "'");
+    } else {
+        add_finding("PASS", "Present PCI identity", "no obvious QEMU/Red Hat/VirtIO PCI IDs in present devices");
+    }
+
+    const std::string low_pci = lower(pci);
+    if (low_pci.find("ven_1022") != std::string::npos) {
+        add_finding("PASS", "AMD PCI topology", "present PCI tree includes AMD vendor IDs");
+    } else {
+        add_finding("WARN", "AMD PCI topology", "no AMD vendor IDs found in present PCI inventory");
+    }
+    if (low_pci.find("ven_1002") != std::string::npos) {
+        add_finding("PASS", "GPU passthrough identity", "AMD GPU/audio vendor IDs are visible");
+    } else {
+        add_finding("WARN", "GPU passthrough identity", "AMD GPU vendor ID was not found in present PCI inventory");
+    }
+    if (low_pci.find("ven_10ec") != std::string::npos) {
+        add_finding("PASS", "NIC passthrough identity", "Realtek NIC vendor ID is visible");
+    } else {
+        add_finding("WARN", "NIC passthrough identity", "Realtek NIC vendor ID was not found in present PCI inventory");
+    }
+}
+
 static void check_network_macs()
 {
     std::cout << "\n== Network Adapters ==\n";
     const std::string macs = run_command(
         "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"Get-NetAdapter | Select-Object Name, MacAddress | Format-Table -AutoSize\" 2>$null");
+        "\"Get-NetAdapter | Select-Object Name, MacAddress | Format-Table -AutoSize\" 2>NUL");
 
     if (trim(macs).empty()) {
         add_finding("WARN", "Network MACs", "Could not query network adapters via PowerShell");
@@ -735,7 +1075,7 @@ static void check_registry_devices()
         "\"Get-PnpDevice -PresentOnly | Where-Object { "
         "$_.InstanceId -match 'QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|VEN_1B36|VEN_1AF4|SPICE|QXL|VMWARE|VBOX|XEN' -or "
         "$_.FriendlyName -match 'QEMU|BOCHS|KVM|VIRTIO|Red Hat|SPICE|QXL|VMware|VirtualBox|Xen' "
-        "} | Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize\" 2>$null");
+        "} | Select-Object Status,Class,FriendlyName,InstanceId | Format-Table -AutoSize\" 2>NUL");
     if (!trim(present_devices).empty()) {
         std::cout << "Present suspicious PnP devices:\n" << present_devices << "\n";
         add_finding("FAIL", "Present VM devices", "Windows currently reports suspicious QEMU/KVM/VirtIO-style devices");
@@ -792,12 +1132,17 @@ int main()
 
     check_cpuid();
     check_timing();
+    check_processor_topology();
     check_cache_topology();
     check_smbios();
     check_acpi();
     check_tpm_secure_boot();
+    check_windows_security_state();
+    check_vanguard_services();
     check_thermal_topology();
+    check_memory_and_pagefile();
     check_physical_disks();
+    check_pci_identity();
     check_network_macs();
     check_registry_devices();
     print_summary();
