@@ -64,16 +64,16 @@
       <relaxed state='on'/>
       <vapic state='on'/>
       <spinlocks state='on' retries='8191'/>
-      <vpindex state='on'/>
-      <runtime state='on'/>
-      <synic state='on'/>
-      <stimer state='on'/>
-      <reset state='on'/>
+      <vpindex state='off'/>
+      <runtime state='off'/>
+      <synic state='off'/>
+      <stimer state='off'/>
+      <reset state='off'/>
       <vendor_id state='on' value='GenuineIntel'/>
-      <frequencies state='on'/>
-      <reenlightenment state='on'/>
-      <tlbflush state='on'/>
-      <ipi state='on'/>
+      <frequencies state='off'/>
+      <reenlightenment state='off'/>
+      <tlbflush state='off'/>
+      <ipi state='off'/>
       <evmcs state='off'/>
     </hyperv>
     <kvm>
