@@ -15,7 +15,7 @@
     # Applies qemu-vmcall-patch/changes.patch via the standard NixOS patches mechanism.
     qemuPatchedOverlay = final: prev:
     let
-      applyHypercallFix = pkg: pkg.overrideAttrs (old: {
+      applyGhostQemuPatches = pkg: pkg.overrideAttrs (old: {
         patches = (old.patches or []) ++ [ ./patches/qemu-disable-hypercall-quirk.patch ];
         postPatch = (old.postPatch or "") + ''
           substituteInPlace target/i386/kvm/kvm.c \
@@ -51,9 +51,18 @@ static bool tsc_is_stable_and_known'
             --replace-fail '#define ACPI_BUILD_APPNAME6 "BOCHS "' '#define ACPI_BUILD_APPNAME6 "ALASKA"' \
             --replace-fail '#define ACPI_BUILD_APPNAME8 "BXPC    "' '#define ACPI_BUILD_APPNAME8 "A M I   "'
         '';
+        postInstall = (old.postInstall or "") + ''
+          mkdir -p "$out/nix-support"
+          cat > "$out/nix-support/ghost-qemu-patches" <<'EOF'
+qemu-vmcall-patch=present
+qemu-tsc-frequency-log=present
+qemu-acpi-oem=patched
+EOF
+        '';
       });
     in {
-      qemu_kvm = applyHypercallFix prev.qemu_kvm;
+      qemu = applyGhostQemuPatches prev.qemu;
+      qemu_kvm = applyGhostQemuPatches prev.qemu_kvm;
     };
   in
   {

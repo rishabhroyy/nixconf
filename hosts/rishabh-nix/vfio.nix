@@ -449,7 +449,22 @@ in
       XML_QEMU="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<emulator>\(.*\)</emulator>.*:\1:p')"
       echo "xml: $XML_QEMU"
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
-        ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
+        QEMU_OUT="$(${pkgs.coreutils}/bin/dirname "$(${pkgs.coreutils}/bin/dirname "$XML_QEMU")")"
+        if [ -f "$QEMU_OUT/nix-support/ghost-qemu-patches" ]; then
+          ${pkgs.coreutils}/bin/cat "$QEMU_OUT/nix-support/ghost-qemu-patches"
+        else
+          echo "qemu-patched-derivation-marker=missing"
+        fi
+        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'failed to disable hypercall quirk'; then
+          echo "qemu-vmcall-patch=present"
+        else
+          echo "qemu-vmcall-patch=missing"
+        fi
+        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'tsc-scaling-patch'; then
+          echo "qemu-tsc-frequency-log=present"
+        else
+          echo "qemu-tsc-frequency-log=missing"
+        fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'qemu-acpi-oem-patch=ALASKA,A M I'; then
           echo "qemu-acpi-oem=patched"
         else
@@ -467,7 +482,7 @@ in
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
       ${pkgs.coreutils}/bin/printf 'kvm-tsc-cpuid-compensate.enabled='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled 2>/dev/null || ${pkgs.coreutils}/bin/echo unloaded
-      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
       ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep 'qemu-acpi-oem-patch=ALASKA,A M I' || true
 
       echo
