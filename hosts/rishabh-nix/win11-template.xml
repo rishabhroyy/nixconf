@@ -1,26 +1,31 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11</name>
-  <memory unit='KiB'>25165824</memory>
-  <currentMemory unit='KiB'>25165824</currentMemory>
+  <memory unit='KiB'>16777216</memory>
+  <currentMemory unit='KiB'>16777216</currentMemory>
   <memoryBacking>
     <hugepages>
       <page size='1' unit='G'/>
     </hugepages>
   </memoryBacking>
-  <vcpu placement='static'>12</vcpu>
+  <vcpu placement='static'>16</vcpu>
   <cputune>
-    <vcpupin vcpu='0' cpuset='2'/>
-    <vcpupin vcpu='1' cpuset='10'/>
-    <vcpupin vcpu='2' cpuset='3'/>
-    <vcpupin vcpu='3' cpuset='11'/>
-    <vcpupin vcpu='4' cpuset='4'/>
-    <vcpupin vcpu='5' cpuset='12'/>
-    <vcpupin vcpu='6' cpuset='5'/>
-    <vcpupin vcpu='7' cpuset='13'/>
-    <vcpupin vcpu='8' cpuset='6'/>
-    <vcpupin vcpu='9' cpuset='14'/>
-    <vcpupin vcpu='10' cpuset='7'/>
-    <vcpupin vcpu='11' cpuset='15'/>
+    <!-- Guest cores 0-1 share the host housekeeping cores; cores 2-7 stay isolated. -->
+    <vcpupin vcpu='0' cpuset='0'/>
+    <vcpupin vcpu='1' cpuset='8'/>
+    <vcpupin vcpu='2' cpuset='1'/>
+    <vcpupin vcpu='3' cpuset='9'/>
+    <vcpupin vcpu='4' cpuset='2'/>
+    <vcpupin vcpu='5' cpuset='10'/>
+    <vcpupin vcpu='6' cpuset='3'/>
+    <vcpupin vcpu='7' cpuset='11'/>
+    <vcpupin vcpu='8' cpuset='4'/>
+    <vcpupin vcpu='9' cpuset='12'/>
+    <vcpupin vcpu='10' cpuset='5'/>
+    <vcpupin vcpu='11' cpuset='13'/>
+    <vcpupin vcpu='12' cpuset='6'/>
+    <vcpupin vcpu='13' cpuset='14'/>
+    <vcpupin vcpu='14' cpuset='7'/>
+    <vcpupin vcpu='15' cpuset='15'/>
     <emulatorpin cpuset='0-1,8-9'/>
   </cputune>
   <os>
@@ -67,7 +72,7 @@ $HYPERV_FEATURES
     <ioapic driver='qemu'/>
   </features>
   <cpu mode='host-passthrough' check='none' migratable='off'>
-    <topology sockets='1' dies='1' cores='6' threads='2'/>
+    <topology sockets='1' dies='1' cores='8' threads='2'/>
     <cache mode='passthrough'/>
     <feature policy='require' name='topoext'/>
     <feature policy='disable' name='hypervisor'/>

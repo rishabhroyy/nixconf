@@ -19,7 +19,7 @@ in
     "kvm.report_ignored_msrs=0"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
-    "hugepages=24"
+    "hugepages=16"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
@@ -60,7 +60,7 @@ in
       GUEST_NAME="$1"
       OPERATION="$2"
       SUB_OPERATION="$3"
-      HUGEPAGES_1G="24"
+      HUGEPAGES_1G="16"
       HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
       HOST_CPU_LIST="0-1,8-9"
       HOST_CPU_MASK="303"
@@ -775,6 +775,7 @@ EOF
 
       echo
       echo "== CPU affinity =="
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin' || true
       ${pkgs.coreutils}/bin/cat /proc/irq/default_smp_affinity 2>/dev/null || true
       ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
