@@ -214,6 +214,48 @@ in
         exit 1
       fi
 
+      prepare_patched_ovmf_code() {
+        SRC=/run/libvirt/nix-ovmf/edk2-x86_64-secure-code.fd
+        DST=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd
+        MARKER=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.source.sha256
+        SRC_HASH="$(${pkgs.coreutils}/bin/sha256sum "$SRC" | ${pkgs.gawk}/bin/awk '{ print $1 }')"
+        PATCH_ID="ovmf-acpi-identity-v1"
+
+        if [ -f "$DST" ] && [ -f "$MARKER" ] && [ "$(${pkgs.coreutils}/bin/cat "$MARKER")" = "$SRC_HASH $PATCH_ID" ]; then
+          return
+        fi
+
+        ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$DST")"
+        ${pkgs.coreutils}/bin/cp "$SRC" "$DST.tmp"
+        ${pkgs.python3}/bin/python3 - "$DST.tmp" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = path.read_bytes()
+replacements = [
+    (b"INTEL ", b"ALASKA"),
+    (b"EDK2    ", b"A M I   "),
+]
+
+counts = {}
+for old, new in replacements:
+    count = data.count(old)
+    counts[old.decode("latin1")] = count
+    if count == 0:
+        raise SystemExit(f"OVMF identity token {old!r} was not found")
+    data = data.replace(old, new)
+
+path.write_bytes(data)
+print("Patched OVMF identity tokens: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
+PY
+        ${pkgs.coreutils}/bin/install -m 0644 "$DST.tmp" "$DST"
+        ${pkgs.coreutils}/bin/rm -f "$DST.tmp"
+        ${pkgs.coreutils}/bin/printf '%s %s\n' "$SRC_HASH" "$PATCH_ID" > "$MARKER"
+      }
+
+      prepare_patched_ovmf_code
+
       enroll_secure_boot_keys_once() {
         NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
         TEMPLATE=/run/libvirt/nix-ovmf/edk2-i386-vars.fd
@@ -420,6 +462,7 @@ EOF
       export MEMORY_SERIAL="$(qemu_smbios_value "$RAW_MEMORY_SERIAL")"
       export MEMORY_PART="$(qemu_smbios_value "$RAW_MEMORY_PART")"
       export MEMORY_SPEED="$RAW_MEMORY_SPEED"
+      export OVMF_CODE="/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd"
       export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
@@ -730,6 +773,21 @@ EOF
       echo
       echo "== OVMF / Secure Boot =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure' || true
+      OVMF_LOADER="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<loader[^>]*>\(.*\)</loader>.*:\1:p')"
+      if [ -n "$OVMF_LOADER" ] && [ -f "$OVMF_LOADER" ]; then
+        ${pkgs.coreutils}/bin/printf 'ovmf-bgrt-oem-copy='
+        case "$OVMF_LOADER" in
+          /var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd) ${pkgs.coreutils}/bin/echo present ;;
+          *) ${pkgs.coreutils}/bin/echo missing ;;
+        esac
+        ${pkgs.coreutils}/bin/printf 'ovmf-bgrt-oem-strings='
+        if ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'ALASKA' &&
+           ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'A M I'; then
+          ${pkgs.coreutils}/bin/echo patched
+        else
+          ${pkgs.coreutils}/bin/echo missing-marker
+        fi
+      fi
 
       echo
       echo "== CPU / Hypervisor Masking =="
