@@ -13,7 +13,7 @@ in
     ./vfio.nix
     ../../modules/kvm-hypercall-patch.nix
   ];
-  
+
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # Bootloader (Systemd-boot as default for modern UEFI)
