@@ -12,6 +12,7 @@ in
     ./samba-ntfs.nix
     ./vfio.nix
     ../../modules/kvm-hypercall-patch.nix
+    ../../modules/kvm-tsc-cpuid-compensate.nix
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
