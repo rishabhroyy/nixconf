@@ -207,10 +207,4 @@
     <input type='mouse' bus='ps2'/>
     <input type='keyboard' bus='ps2'/>
   </devices>
-
-  <qemu:commandline>
-    <qemu:arg value='-acpitable'/>
-    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/FACP.bin'/>
-  </qemu:commandline>
-
 </domain>

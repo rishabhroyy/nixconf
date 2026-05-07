@@ -321,7 +321,6 @@ in
       fi
 
       ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*frequency='$TSC_FREQUENCY_HZ'" /tmp/win11-resolved.xml
-      ${pkgs.gnugrep}/bin/grep -q '<qemu:commandline>' /tmp/win11-resolved.xml
 
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
       ${pkgs.libvirt}/bin/virsh autostart win11
