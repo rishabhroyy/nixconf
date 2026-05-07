@@ -118,7 +118,7 @@ static void check_cpuid()
     const bool microsoft_hv = hv_low.find("microsoft hv") != std::string::npos;
 
     if (hypervisor_bit && microsoft_hv) {
-        add_finding("WARN", "CPUID hypervisor bit", "ECX[31] is set with Microsoft Hv; expected when Windows Hyper-V/VBS is active");
+        add_finding("PASS", "CPUID hypervisor bit", "ECX[31] is set with Microsoft Hv (Authentic VBS/Hyper-V masking)");
     } else if (hypervisor_bit) {
         add_finding("FAIL", "CPUID hypervisor bit", "ECX[31] is set without a Microsoft Hv context");
     } else {
@@ -133,7 +133,7 @@ static void check_cpuid()
             hv_low.find("xen") != std::string::npos || hv_low.find("vmware") != std::string::npos) {
             add_finding("FAIL", "Hypervisor CPUID vendor", detail.str());
         } else if (microsoft_hv) {
-            add_finding("WARN", "Hypervisor CPUID vendor", detail.str() + " (matches Microsoft Hyper-V/VBS)");
+            add_finding("PASS", "Hypervisor CPUID vendor", detail.str() + " (matches authentic Microsoft Hyper-V/VBS)");
         } else {
             add_finding("WARN", "Hypervisor CPUID vendor", detail.str());
         }
@@ -363,7 +363,7 @@ static void print_smbios_field(const std::string& label, const std::string& valu
         "qemu", "bochs", "seabios", "kvm", "xen", "vmware", "virtualbox", "bhyve", "hyper-v", "red hat"
     };
     static const std::vector<std::string> weak = {
-        "to be filled", "default string", "not specified", "none", "system serial number"
+        "to be filled", "default string", "not specified", "none", "system serial number", "unknown"
     };
 
     std::string matched;
@@ -430,6 +430,10 @@ static void check_smbios()
             print_smbios_field("Chassis version", smbios_string(strings, data[6]), suspicious_count, weak_count);
             print_smbios_field("Chassis serial", smbios_string(strings, data[7]), suspicious_count, weak_count);
             print_smbios_field("Chassis asset", smbios_string(strings, data[8]), suspicious_count, weak_count);
+        } else if (type == 17 && len >= 0x1B) {
+            print_smbios_field("Memory Manufacturer", smbios_string(strings, data[0x17]), suspicious_count, weak_count);
+            print_smbios_field("Memory Serial", smbios_string(strings, data[0x18]), suspicious_count, weak_count);
+            print_smbios_field("Memory Part", smbios_string(strings, data[0x1A]), suspicious_count, weak_count);
         }
 
         size_t next = len;
@@ -586,6 +590,60 @@ static void check_thermal_topology()
     }
 }
 
+static void check_physical_disks()
+{
+    std::cout << "\n== Physical Disks ==\n";
+    const std::string disks = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-PhysicalDisk | Select-Object FriendlyName, SerialNumber | Format-Table -AutoSize\" 2>$null");
+
+    if (trim(disks).empty()) {
+        add_finding("WARN", "Physical Disks", "Could not query physical disks via PowerShell");
+        return;
+    }
+    std::cout << disks << "\n";
+
+    static const std::vector<std::string> suspicious = {"qemu", "virtio", "bochs", "vmware", "vbox", "red hat"};
+    std::string matched;
+    
+    if (contains_any(disks, suspicious, &matched)) {
+        add_finding("FAIL", "Disk Model", "Contains suspicious virtualization marker: '" + matched + "'");
+    } else {
+        add_finding("PASS", "Disk Model", "No obvious VM strings in disk models");
+    }
+
+    if (disks.find("0000000000000000") != std::string::npos) {
+        add_finding("WARN", "Disk Serial", "Found generic/zeroed serial number");
+    } else {
+        add_finding("PASS", "Disk Serial", "No obvious generic zeroed serials found");
+    }
+}
+
+static void check_network_macs()
+{
+    std::cout << "\n== Network Adapters ==\n";
+    const std::string macs = run_command(
+        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+        "\"Get-NetAdapter | Select-Object Name, MacAddress | Format-Table -AutoSize\" 2>$null");
+
+    if (trim(macs).empty()) {
+        add_finding("WARN", "Network MACs", "Could not query network adapters via PowerShell");
+        return;
+    }
+    std::cout << macs << "\n";
+
+    const std::string low_macs = lower(macs);
+    if (low_macs.find("52-54-00") != std::string::npos || low_macs.find("52:54:00") != std::string::npos) {
+        add_finding("FAIL", "MAC Address", "Found default QEMU/KVM OUI (52:54:00)");
+    } else if (low_macs.find("08-00-27") != std::string::npos || low_macs.find("08:00:27") != std::string::npos) {
+        add_finding("FAIL", "MAC Address", "Found default VirtualBox OUI (08:00:27)");
+    } else if (low_macs.find("00-15-5d") != std::string::npos || low_macs.find("00:15:5d") != std::string::npos) {
+        add_finding("WARN", "MAC Address", "Found Hyper-V OUI (00:15:5D); verify this isn't a virtual switch leak");
+    } else {
+        add_finding("PASS", "MAC Address", "No default VM bridge OUIs detected");
+    }
+}
+
 static std::string reg_value_to_string(DWORD type, const std::vector<unsigned char>& data)
 {
     if ((type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ) && !data.empty()) {
@@ -735,6 +793,8 @@ int main()
     check_acpi();
     check_tpm_secure_boot();
     check_thermal_topology();
+    check_physical_disks();
+    check_network_macs();
     check_registry_devices();
     print_summary();
 
