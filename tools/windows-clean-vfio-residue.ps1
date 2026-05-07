@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$pattern = "QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|SPICE|QXL|VMWARE|VBOX|XEN|VIOSCSI|VIOSTOR|NETKVM|BALLOON|VDAGENT"
+$pattern = "QEMU|BOCHS|KVM|VIRTIO|VEN_QEMU|VEN_REDHAT|VEN_1B36|VEN_1AF4|SPICE|QXL|VMWARE|VBOX|XEN|VIOSCSI|VIOSTOR|NETKVM|BALLOON|VDAGENT"
 
 Write-Host "Suspicious currently-present PnP devices:"
 $present = Get-PnpDevice -PresentOnly | Where-Object {
@@ -40,4 +40,3 @@ if ($RemovePresent -and $present.Count -gt 0) {
     Write-Host ""
     Write-Host "Present suspicious devices were left alone. Reboot after host-side fixes, then rerun this script."
 }
-
