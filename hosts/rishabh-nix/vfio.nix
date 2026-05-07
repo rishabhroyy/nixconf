@@ -219,7 +219,7 @@ in
         DST=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd
         MARKER=/var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.source.sha256
         SRC_HASH="$(${pkgs.coreutils}/bin/sha256sum "$SRC" | ${pkgs.gawk}/bin/awk '{ print $1 }')"
-        PATCH_ID="ovmf-bgrt-identity-v2"
+        PATCH_ID="ovmf-acpi-pcd-identity-v3"
 
         if [ -f "$DST" ] && [ -f "$MARKER" ] && [ "$(${pkgs.coreutils}/bin/cat "$MARKER")" = "$SRC_HASH $PATCH_ID" ]; then
           return
@@ -232,25 +232,28 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-data = bytearray(path.read_bytes())
-patched = 0
+data = path.read_bytes()
 
-# ACPI table headers are 36 bytes:
-# signature[0:4], length[4:8], revision[8], checksum[9], OEMID[10:16],
-# OEMTableID[16:24].  Patch only embedded BGRT table/template headers.
-for pos in range(0, len(data) - 36):
-    if data[pos:pos + 4] != b"BGRT":
-        continue
-    if data[pos + 10:pos + 16] == b"INTEL " and data[pos + 16:pos + 24] == b"EDK2    ":
-        data[pos + 10:pos + 16] = b"ALASKA"
-        data[pos + 16:pos + 24] = b"A M I   "
-        patched += 1
+# EDK2's BootGraphicsResourceTableDxe does not keep a finished BGRT table in
+# flash.  At runtime it fills BGRT's ACPI header from the platform defaults:
+# PcdAcpiDefaultOemId and PcdAcpiDefaultOemTableId.  Patch those exact ACPI-sized
+# default tokens in the VM-local OVMF copy so firmware-generated tables,
+# including BGRT, line up with the rest of the spoofed AMI/ALASKA ACPI surface.
+replacements = [
+    (b"INTEL ", b"ALASKA"),
+    (b"EDK2    ", b"A M I   "),
+]
 
-if patched == 0:
-    raise SystemExit("No BGRT ACPI header with OEMID='INTEL ' OEMTableID='EDK2    ' found in OVMF")
+counts = {}
+for old, new in replacements:
+    count = data.count(old)
+    counts[old.decode("latin1")] = count
+    if count == 0:
+        raise SystemExit(f"OVMF ACPI default identity token {old!r} was not found")
+    data = data.replace(old, new)
 
 path.write_bytes(data)
-print(f"Patched OVMF BGRT ACPI identity headers: {patched}")
+print("Patched OVMF ACPI default identity tokens: " + ", ".join(f"{key}={value}" for key, value in counts.items()))
 PY
         ${pkgs.coreutils}/bin/install -m 0644 "$DST.tmp" "$DST"
         ${pkgs.coreutils}/bin/rm -f "$DST.tmp"
@@ -778,12 +781,12 @@ EOF
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure' || true
       OVMF_LOADER="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<loader[^>]*>\(.*\)</loader>.*:\1:p')"
       if [ -n "$OVMF_LOADER" ] && [ -f "$OVMF_LOADER" ]; then
-        ${pkgs.coreutils}/bin/printf 'ovmf-bgrt-oem-copy='
+        ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-copy='
         case "$OVMF_LOADER" in
           /var/lib/libvirt/qemu/ovmf/edk2-x86_64-secure-code.ghost.fd) ${pkgs.coreutils}/bin/echo present ;;
           *) ${pkgs.coreutils}/bin/echo missing ;;
         esac
-        ${pkgs.coreutils}/bin/printf 'ovmf-bgrt-oem-strings='
+        ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-strings='
         if ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'ALASKA' &&
            ${pkgs.binutils}/bin/strings "$OVMF_LOADER" | ${pkgs.gnugrep}/bin/grep -q 'A M I'; then
           ${pkgs.coreutils}/bin/echo patched
