@@ -231,6 +231,10 @@ in
         fi
       done
       chmod 644 /var/lib/libvirt/qemu/acpi/FACP.bin /var/lib/libvirt/qemu/acpi/DSDT.aml 2>/dev/null || true
+      if [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then
+        echo "Retiring old full-FACP ACPI spoofing toggle; QEMU ACPI OEM IDs are patched at build time now."
+        rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
+      fi
 
       if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
         echo "Updating existing win11 VM definition while preserving OVMF NVRAM..."
@@ -298,9 +302,9 @@ in
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
       export QEMU_COMMANDLINE=""
-      if [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then
+      if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then
         if [ ! -f /var/lib/libvirt/qemu/acpi/FACP.bin ]; then
-          echo "ACPI spoofing is enabled, but /var/lib/libvirt/qemu/acpi/FACP.bin is missing"
+          echo "Legacy FACP spoofing is enabled, but /var/lib/libvirt/qemu/acpi/FACP.bin is missing"
           exit 1
         fi
 
@@ -356,17 +360,18 @@ in
       set -eu
 
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining ACPI tables." >&2
+        echo "win11 is running; shut it down before redefining the VM." >&2
         exit 1
       fi
 
-      ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-acpi-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A6 'qemu:commandline' || true
+      echo "ACPI spoofing is now the safe QEMU-header mode: no full host FACP/DSDT tables are injected."
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
     '')
-    (pkgs.writeShellScriptBin "enable-win11-dsdt-spoofing" ''
+    (pkgs.writeShellScriptBin "enable-win11-legacy-facp-spoofing" ''
       set -eu
 
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
@@ -375,7 +380,21 @@ in
       fi
 
       ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-acpi-spoofing
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
+      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
+    '')
+    (pkgs.writeShellScriptBin "enable-win11-legacy-dsdt-spoofing" ''
+      set -eu
+
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running; shut it down before redefining ACPI tables." >&2
+        exit 1
+      fi
+
+      ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
@@ -389,6 +408,7 @@ in
       fi
 
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
@@ -422,6 +442,7 @@ in
       echo "xml: $XML_QEMU"
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
+        ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -E 'ACPI_BUILD_APPNAME|BOCHS|BXPC|ALASKA|A M I' || true
       fi
       PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
       if [ -n "$PID" ]; then
@@ -448,9 +469,10 @@ in
 
       echo
       echo "== ACPI =="
-      ${pkgs.coreutils}/bin/printf 'acpi-spoofing='
-      if [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
-      ${pkgs.coreutils}/bin/printf 'dsdt-spoofing='
+      echo "acpi-spoofing=qemu-header-patch"
+      ${pkgs.coreutils}/bin/printf 'legacy-facp-spoofing='
+      if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
+      ${pkgs.coreutils}/bin/printf 'legacy-dsdt-spoofing='
       if [ -f /var/lib/libvirt/qemu/enable-dsdt-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
       ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true

@@ -47,6 +47,9 @@ static bool tsc_is_stable_and_known' '    if (env->tsc_khz) {
 }
 
 static bool tsc_is_stable_and_known'
+          substituteInPlace include/hw/acpi/aml-build.h \
+            --replace-fail '#define ACPI_BUILD_APPNAME6 "BOCHS "' '#define ACPI_BUILD_APPNAME6 "ALASKA"' \
+            --replace-fail '#define ACPI_BUILD_APPNAME8 "BXPC    "' '#define ACPI_BUILD_APPNAME8 "A M I   "'
         '';
       });
     in {
