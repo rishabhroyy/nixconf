@@ -69,7 +69,7 @@ $HYPERV_FEATURES
     <kvm>
       <hidden state='on'/>
     </kvm>
-    <ioapic driver='qemu'/>
+    <ioapic driver='kvm'/>
   </features>
   <cpu mode='host-passthrough' check='none' migratable='off'>
     <topology sockets='1' dies='1' cores='8' threads='2'/>

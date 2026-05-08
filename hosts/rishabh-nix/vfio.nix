@@ -26,10 +26,9 @@ in
 
   powerManagement.cpuFreqGovernor = "performance";
 
-  # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation).
-  # Leave AVIC on the kernel default; forcing it caused unstable guest timing on
-  # this host/kernel combination.
-  boot.extraModprobeConfig = "options kvm_amd nested=1";
+  # Enable nested virtualization for Windows VBS/Core Isolation and retry AVIC
+  # without the FIFO scheduler experiment that starved the host.
+  boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
   # Keep the CPUID/RDTSC compensation module available as a manual experiment,
   # but do not load it by default. The default path uses natural VBS-style
@@ -419,36 +418,12 @@ EOF
       export OVMF_VARS="${pkgs.ovmf_ghost.variables}"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
-      if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then
-        export HYPERV_FEATURES=""
-        export SVM_FEATURE="    <feature policy='disable' name='svm'/>"
-        export HYPERVCLOCK_TIMER=""
-      elif [ -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features ]; then
-        export HYPERV_FEATURES="    <hyperv mode='custom'>
-      <relaxed state='on'/>
-      <vapic state='on'/>
-      <spinlocks state='on' retries='8191'/>
-      <vpindex state='off'/>
-      <runtime state='off'/>
-      <synic state='off'/>
-      <stimer state='off'/>
-      <reset state='off'/>
-      <vendor_id state='on' value='GenuineIntel'/>
-      <frequencies state='off'/>
-      <reenlightenment state='off'/>
-      <tlbflush state='off'/>
-      <ipi state='off'/>
-      <evmcs state='off'/>
-    </hyperv>"
-        export SVM_FEATURE="    <feature policy='require' name='svm'/>"
-        export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
-      else
-        export HYPERV_FEATURES="    <hyperv mode='custom'>
+      export HYPERV_FEATURES="    <hyperv mode='custom'>
       <relaxed state='on'/>
       <vapic state='on'/>
       <spinlocks state='on' retries='8191'/>
       <vpindex state='on'/>
-      <runtime state='off'/>
+      <runtime state='on'/>
       <synic state='on'/>
       <stimer state='on'>
         <direct state='on'/>
@@ -459,11 +434,9 @@ EOF
       <reenlightenment state='on'/>
       <tlbflush state='on'/>
       <ipi state='on'/>
-      <evmcs state='off'/>
     </hyperv>"
-        export SVM_FEATURE="    <feature policy='require' name='svm'/>"
-        export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
-      fi
+      export SVM_FEATURE="    <feature policy='require' name='svm'/>"
+      export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
 
       export QEMU_COMMANDLINE="  <qemu:commandline>
     <qemu:arg value='-acpitable'/>
@@ -595,12 +568,14 @@ EOF
         exit 1
       fi
 
+      # Clear older A/B marker files; the VM definition now always emits the
+      # maximal AMD-compatible Hyper-V enlightenment set.
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "Windows Hyper-V/VBS support is enabled in the default aggressive VM definition."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|evmcs|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
+      echo "Windows Hyper-V/VBS support is enabled in the maximal VM definition."
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
     '')
     (pkgs.writeShellScriptBin "enable-win11-aggressive-hyperv-features" ''
       set -eu
@@ -610,42 +585,13 @@ EOF
         exit 1
       fi
 
+      # Compatibility alias for the old A/B command name.
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "Aggressive nested Hyper-V enlightenment profile is enabled."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|evmcs|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
-    '')
-    (pkgs.writeShellScriptBin "enable-win11-stable-hyperv-features" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "Stable nested Hyper-V enlightenment profile is enabled for rollback/A-B testing."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|evmcs|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
-    '')
-    (pkgs.writeShellScriptBin "disable-win11-hyperv-features" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/disable-win11-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "Windows Hyper-V/VBS support is disabled in the VM definition for A/B testing."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|evmcs|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
     '')
     (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
       set -eu
@@ -803,22 +749,16 @@ EOF
       echo
       echo "== CPU / Hypervisor Masking =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='qemu'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'hyperv-feature-toggle='
-      if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then ${pkgs.coreutils}/bin/echo disabled; else ${pkgs.coreutils}/bin/echo enabled; fi
+      ${pkgs.coreutils}/bin/echo enabled
       ${pkgs.coreutils}/bin/printf 'hyperv-profile='
-      if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then
-        ${pkgs.coreutils}/bin/echo disabled
-      elif [ -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features ]; then
-        ${pkgs.coreutils}/bin/echo stable
-      else
-        ${pkgs.coreutils}/bin/echo aggressive
-      fi
+      ${pkgs.coreutils}/bin/echo maximal
       ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q '<hyperv'; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|evmcs' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi' || true
       ${pkgs.coreutils}/bin/printf 'hypervclock-timer='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q "timer name='hypervclock'"; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
 
