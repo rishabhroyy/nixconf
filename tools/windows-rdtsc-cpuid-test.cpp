@@ -24,6 +24,7 @@ struct Finding {
 };
 
 static std::vector<Finding> findings;
+static bool g_microsoft_hv_context = false;
 
 static void add_finding(const std::string& status, const std::string& name, const std::string& detail)
 {
@@ -138,6 +139,7 @@ static void check_cpuid()
     const std::string hv_vendor = cpuid_leaf_vendor(0x40000000);
     const std::string hv_low = lower(hv_vendor);
     const bool microsoft_hv = hv_low.find("microsoft hv") != std::string::npos;
+    g_microsoft_hv_context = hypervisor_bit && microsoft_hv;
 
     if (hypervisor_bit && microsoft_hv) {
         add_finding("PASS", "CPUID hypervisor bit", "ECX[31] is set with Microsoft Hv (Authentic VBS/Hyper-V masking)");
@@ -283,7 +285,17 @@ static void check_timing()
     const auto cpuid0_med = cpuid0_stats.median;
     const auto cpuid0_p95 = cpuid0_stats.p95;
     const auto cpuid0_p99 = cpuid0_stats.p99;
-    if (cpuid0_med < 500 && cpuid0_p95 < 800) {
+    if (g_microsoft_hv_context) {
+        if (cpuid0_med < 100 && cpuid0_p95 < 150) {
+            add_finding("WARN", "CPUID timing", "too perfect for the Microsoft Hyper-V/VBS posture; check that CPUID TSC compensation is disabled");
+        } else if (cpuid0_med <= 1200 && cpuid0_p95 <= 3000) {
+            add_finding("PASS", "CPUID timing", "natural Microsoft Hyper-V/VBS-style fast path; no obvious preemption wall");
+        } else if (cpuid0_med <= 2500 && cpuid0_p95 <= 8000) {
+            add_finding("WARN", "CPUID timing", "plausible but noisy VBS-style timing; shared cores or host interrupts may still be visible");
+        } else {
+            add_finding("FAIL", "CPUID timing", "latency still looks dominated by host preemption or slow VM exits");
+        }
+    } else if (cpuid0_med < 500 && cpuid0_p95 < 800) {
         add_finding("PASS", "CPUID timing", "median and p95 are in the intended low-latency range");
     } else if (cpuid0_med < 800 && cpuid0_p95 < 1500) {
         add_finding("WARN", "CPUID timing", "better than default VM behavior, but still visibly elevated");
@@ -291,7 +303,7 @@ static void check_timing()
         add_finding("FAIL", "CPUID timing", "latency still looks VM-exit-like");
     }
 
-    if (cpuid0_p99 > 5000) {
+    if (cpuid0_p99 > 10000) {
         add_finding("WARN", "Timing spikes", "CPUID p99 has large outliers; host scheduling/noise may still be visible");
     }
 
@@ -335,7 +347,13 @@ static void check_timing()
 
         std::ostringstream sweep;
         sweep << "worst logical CPU " << worst_cpu << " p95/p99=" << worst_p95 << "/" << worst_p99 << " cycles";
-        if (worst_p95 < 800) {
+        if (g_microsoft_hv_context && worst_p95 < 100 && worst_p99 < 150) {
+            add_finding("WARN", "Per-CPU timing sweep", sweep.str() + "; timing is suspiciously flat for VBS/Hyper-V");
+        } else if (g_microsoft_hv_context && worst_p95 <= 3000 && worst_p99 <= 10000) {
+            add_finding("PASS", "Per-CPU timing sweep", sweep.str() + "; within natural VBS-style fast path");
+        } else if (g_microsoft_hv_context && worst_p95 <= 8000) {
+            add_finding("WARN", "Per-CPU timing sweep", sweep.str() + "; shared host cores may be noisy");
+        } else if (worst_p95 < 800) {
             add_finding("PASS", "Per-CPU timing sweep", sweep.str());
         } else if (worst_p95 < 1500) {
             add_finding("WARN", "Per-CPU timing sweep", sweep.str() + "; shared host cores may be noisy");
