@@ -23,9 +23,10 @@ in
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
-  # Enable nested virtualization for Windows VBS/Core Isolation, and AVIC to
-  # reduce interrupt-related exits instead of compensating for them afterward.
-  boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
+  # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation).
+  # Leave AVIC on the kernel default; forcing it caused unstable guest timing on
+  # this host/kernel combination.
+  boot.extraModprobeConfig = "options kvm_amd nested=1";
 
   # Keep the CPUID/RDTSC compensation module available as a manual experiment,
   # but do not load it by default. The default path uses natural VBS-style
@@ -744,7 +745,7 @@ EOF
       echo
       echo "== CPU / Hypervisor Masking =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='qemu'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'hyperv-feature-toggle='
