@@ -30,7 +30,7 @@ in
 
   # Keep the CPUID/RDTSC compensation module available as a manual experiment,
   # but do not load it by default. The default path uses natural VBS-style
-  # timing: invtsc + Hyper-V clock + core isolation + AVIC.
+  # timing: invtsc + Hyper-V clock + core isolation, without TSC subtraction.
   ghost.vfio.cpuidTscCompensation.enableAtBoot = false;
 
   # Load VFIO modules

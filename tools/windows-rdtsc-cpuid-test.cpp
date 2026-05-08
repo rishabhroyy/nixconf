@@ -17,6 +17,12 @@
 #pragma intrinsic(__rdtsc)
 #pragma comment(lib, "Advapi32.lib")
 
+#if defined(_MSC_VER)
+#define NOINLINE __declspec(noinline)
+#else
+#define NOINLINE __attribute__((noinline))
+#endif
+
 struct Finding {
     std::string status;
     std::string name;
@@ -25,6 +31,7 @@ struct Finding {
 
 static std::vector<Finding> findings;
 static bool g_microsoft_hv_context = false;
+static volatile int g_cpuid_sink = 0;
 
 static void add_finding(const std::string& status, const std::string& name, const std::string& detail)
 {
@@ -219,6 +226,13 @@ static void print_timing_stats(const std::string& label, const TimingStats& stat
               << " min/max=" << stats.min << "/" << stats.max << "\n";
 }
 
+static NOINLINE void measured_cpuid(int leaf)
+{
+    int cpu_info[4] = {};
+    __cpuidex(cpu_info, leaf, 0);
+    g_cpuid_sink ^= cpu_info[0] ^ cpu_info[1] ^ cpu_info[2] ^ cpu_info[3];
+}
+
 static void check_timing()
 {
     std::cout << "\n== RDTSC / VM-exit Timing ==\n";
@@ -238,8 +252,6 @@ static void check_timing()
     SetThreadAffinityMask(GetCurrentThread(), 1ull);
 
     for (int i = 0; i < iterations; ++i) {
-        int cpu_info[4];
-
         _mm_lfence();
         unsigned long long start = __rdtsc();
         _mm_lfence();
@@ -249,7 +261,7 @@ static void check_timing()
 
         _mm_lfence();
         start = __rdtsc();
-        __cpuid(cpu_info, 0);
+        measured_cpuid(0);
         _mm_lfence();
         end = __rdtsc();
         _mm_lfence();
@@ -257,7 +269,7 @@ static void check_timing()
 
         _mm_lfence();
         start = __rdtsc();
-        __cpuid(cpu_info, 1);
+        measured_cpuid(1);
         _mm_lfence();
         end = __rdtsc();
         _mm_lfence();
@@ -265,7 +277,7 @@ static void check_timing()
 
         _mm_lfence();
         start = __rdtsc();
-        __cpuid(cpu_info, 0x40000000);
+        measured_cpuid(0x40000000);
         _mm_lfence();
         end = __rdtsc();
         _mm_lfence();
@@ -311,6 +323,25 @@ static void check_timing()
     detail << "CPUID(0) median/p95/p99 = " << cpuid0_med << "/" << cpuid0_p95 << "/" << cpuid0_p99 << " cycles";
     add_finding("INFO", "Timing detail", detail.str());
 
+    LARGE_INTEGER qpc_freq = {};
+    LARGE_INTEGER qpc_start = {};
+    LARGE_INTEGER qpc_end = {};
+    if (QueryPerformanceFrequency(&qpc_freq) && QueryPerformanceCounter(&qpc_start)) {
+        constexpr int bulk_iterations = 200000;
+        for (int i = 0; i < bulk_iterations; ++i) {
+            measured_cpuid(0);
+        }
+        QueryPerformanceCounter(&qpc_end);
+        const double elapsed_ns =
+            (static_cast<double>(qpc_end.QuadPart - qpc_start.QuadPart) * 1000000000.0) /
+            static_cast<double>(qpc_freq.QuadPart);
+        const double ns_per_cpuid = elapsed_ns / static_cast<double>(bulk_iterations);
+        std::cout << "Bulk CPUID(0) wall-clock avg=" << std::fixed << std::setprecision(2)
+                  << ns_per_cpuid << " ns/call\n";
+        add_finding("INFO", "CPUID wall-clock cross-check",
+                    "bulk CPUID loop averaged " + std::to_string(ns_per_cpuid) + " ns/call");
+    }
+
     const DWORD logical_count = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
     if (logical_count > 0 && logical_count <= 64) {
         std::cout << "\nPer-logical-CPU CPUID(0) timing sweep:\n";
@@ -322,10 +353,9 @@ static void check_timing()
             std::vector<unsigned long long> samples;
             samples.reserve(3000);
             for (int i = 0; i < 3000; ++i) {
-                int cpu_info[4];
                 _mm_lfence();
                 unsigned long long start = __rdtsc();
-                __cpuid(cpu_info, 0);
+                measured_cpuid(0);
                 _mm_lfence();
                 unsigned long long end = __rdtsc();
                 _mm_lfence();
