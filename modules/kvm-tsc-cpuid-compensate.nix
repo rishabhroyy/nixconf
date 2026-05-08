@@ -67,6 +67,12 @@ in
 
     boot.kernelModules = lib.optionals cfg.enableAtBoot [ "kvm-tsc-cpuid-compensate" ];
 
+    system.activationScripts.disableKvmTscCpuidCompensate = lib.mkIf (!cfg.enableAtBoot) ''
+      if [ -w /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled ]; then
+        echo 0 > /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled
+      fi
+    '';
+
     environment.systemPackages = [
       (pkgs.writeShellScriptBin "enable-vanguard-rdtsc-patch" ''
         set -eu

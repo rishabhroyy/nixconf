@@ -53,19 +53,6 @@ static void set_v8086_seg' '    if (kvm_vm_ioctl(s, KVM_ENABLE_CAP, &(struct kvm
 }
 
 static void set_v8086_seg'
-          substituteInPlace target/i386/kvm/kvm.c \
-            --replace-fail '    return 0;
-}
-
-static bool tsc_is_stable_and_known' '    if (env->tsc_khz) {
-        info_report("tsc-scaling-patch: guest TSC frequency set to %" PRId64 " kHz; qemu-acpi-oem-patch=ALASKA,A M I",
-                    env->tsc_khz);
-    }
-
-    return 0;
-}
-
-static bool tsc_is_stable_and_known'
           substituteInPlace include/hw/acpi/aml-build.h \
             --replace-fail '#define ACPI_BUILD_APPNAME6 "BOCHS "' '#define ACPI_BUILD_APPNAME6 "ALASKA"' \
             --replace-fail '#define ACPI_BUILD_APPNAME8 "BXPC    "' '#define ACPI_BUILD_APPNAME8 "A M I   "'
@@ -125,7 +112,7 @@ static bool tsc_is_stable_and_known'
           mkdir -p "$out/nix-support"
           cat > "$out/nix-support/ghost-qemu-patches" <<'EOF'
 qemu-vmcall-patch=present
-qemu-tsc-frequency-log=present
+qemu-forced-tsc-frequency-log=absent
 qemu-acpi-oem=patched
 qemu-fwcfg-acpi-hid=MSI0002
 qemu-pcie-bridge-ids=1022:1483

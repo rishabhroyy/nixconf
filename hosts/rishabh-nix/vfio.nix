@@ -23,12 +23,14 @@ in
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
-  # Enable nested virtualization for AMD (required for Windows 11 VBS/Core Isolation)
-  boot.extraModprobeConfig = "options kvm_amd nested=1";
+  # Enable nested virtualization for Windows VBS/Core Isolation, and AVIC to
+  # reduce interrupt-related exits instead of compensating for them afterward.
+  boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
-  # Load the targeted CPUID/RDTSC compensation module by default for the VFIO
-  # profile. It can still be disabled live with disable-vanguard-rdtsc-patch.
-  ghost.vfio.cpuidTscCompensation.enableAtBoot = true;
+  # Keep the CPUID/RDTSC compensation module available as a manual experiment,
+  # but do not load it by default. The default path uses natural VBS-style
+  # timing: invtsc + Hyper-V clock + core isolation + AVIC.
+  ghost.vfio.cpuidTscCompensation.enableAtBoot = false;
 
   # Load VFIO modules
   boot.initrd.kernelModules = [
@@ -359,27 +361,6 @@ EOF
           [ "$NORMALIZED" != "none" ]
       }
 
-      detect_tsc_hz() {
-        if [ -f /var/lib/libvirt/qemu/tsc-frequency-hz ]; then
-          ${pkgs.coreutils}/bin/cat /var/lib/libvirt/qemu/tsc-frequency-hz
-          return
-        fi
-
-        MHZ="$(${pkgs.dmidecode}/bin/dmidecode -s processor-frequency 2>/dev/null | ${pkgs.gawk}/bin/awk '{ print int($1); exit }')"
-        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
-          MHZ="$(${pkgs.util-linux}/bin/lscpu | ${pkgs.gawk}/bin/awk -F: '/CPU max MHz/ { gsub(/^[ \t]+/, "", $2); print int($2); exit }')"
-        fi
-        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
-          MHZ="$(${pkgs.gawk}/bin/awk -F: '/cpu MHz/ { gsub(/^[ \t]+/, "", $2); print int($2); exit }' /proc/cpuinfo)"
-        fi
-        if [ -z "$MHZ" ] || [ "$MHZ" = "0" ]; then
-          MHZ="3800"
-        fi
-
-        # Request a stable virtual TSC just outside KVM's no-scaling tolerance.
-        ${pkgs.gawk}/bin/awk -v mhz="$MHZ" 'BEGIN { printf "%.0f\n", mhz * 1000000 * 0.999 }'
-      }
-
       RAW_UUID="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_uuid)"
       RAW_SERIAL="$(${pkgs.coreutils}/bin/cat /run/secrets/motherboard_serial)"
       RAW_UUID_COMPACT="$(printf '%s' "$RAW_UUID" | ${pkgs.coreutils}/bin/tr -d '-' | ${pkgs.coreutils}/bin/cut -c1-16)"
@@ -432,7 +413,6 @@ EOF
       export MEMORY_SPEED="$RAW_MEMORY_SPEED"
       export OVMF_CODE="${pkgs.ovmf_ghost.firmware}"
       export OVMF_VARS="${pkgs.ovmf_ghost.variables}"
-      export TSC_FREQUENCY_HZ="$(detect_tsc_hz)"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
       if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then
@@ -493,7 +473,7 @@ EOF
       
       # Substitute the $UUID and $SERIAL variables into the template and define it
       ${pkgs.envsubst}/bin/envsubst \
-        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $TSC_FREQUENCY_HZ $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
+        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
         < ${./win11-template.xml} > /tmp/win11-resolved.xml
 
       if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' /tmp/win11-resolved.xml; then
@@ -502,7 +482,7 @@ EOF
         exit 1
       fi
 
-      ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*frequency='$TSC_FREQUENCY_HZ'" /tmp/win11-resolved.xml
+      ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" /tmp/win11-resolved.xml
 
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
       ${pkgs.libvirt}/bin/virsh autostart win11
@@ -714,9 +694,9 @@ EOF
           echo "qemu-binary-vmcall-string=missing"
         fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'tsc-scaling-patch'; then
-          echo "qemu-binary-tsc-string=present"
+          echo "qemu-forced-tsc-frequency-log=present"
         else
-          echo "qemu-binary-tsc-string=missing"
+          echo "qemu-forced-tsc-frequency-log=absent"
         fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'qemu-acpi-oem-patch=ALASKA,A M I'; then
           echo "qemu-binary-acpi-string=present"
@@ -734,6 +714,7 @@ EOF
       echo
       echo "== TSC =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
+      ${pkgs.coreutils}/bin/echo "tsc-frequency=unforced"
       ${pkgs.coreutils}/bin/printf 'kvm-tsc-cpuid-compensate.enabled='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled 2>/dev/null || ${pkgs.coreutils}/bin/echo unloaded
       ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
@@ -763,6 +744,9 @@ EOF
       echo
       echo "== CPU / Hypervisor Masking =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
+      ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
+      ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'hyperv-feature-toggle='
       if [ -f /var/lib/libvirt/qemu/disable-win11-hyperv-features ]; then ${pkgs.coreutils}/bin/echo disabled; else ${pkgs.coreutils}/bin/echo enabled; fi
       ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
@@ -791,7 +775,7 @@ EOF
       echo
       echo "== CPU affinity =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|vcpusched|emulatorsched' || true
       ${pkgs.coreutils}/bin/cat /proc/irq/default_smp_affinity 2>/dev/null || true
       ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
 
