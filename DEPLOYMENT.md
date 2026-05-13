@@ -40,14 +40,32 @@ sudo reset-win11-vm-definition
 sudo reset-win11-secureboot-nvram
 sudo enroll-win11-secureboot-keys
 sudo free-win11-hugepages
+sudo reboot-to-windows
 ```
 
 `reset-win11-secureboot-nvram` replaces the VM's persistent OVMF variables, so
 use it only when firmware variables are broken or intentionally being reset.
 
+## One-Time Boot Switching
+
+From NixOS, reboot once into the bare-metal Windows boot entry:
+
+```bash
+sudo reboot-to-windows
+```
+
+From Windows, run PowerShell as Administrator from this repo checkout:
+
+```powershell
+.\tools\windows-reboot-to-nixos.ps1
+```
+
+Both commands use UEFI BootNext/bootsequence, so the change is one-time rather
+than a permanent boot order edit.
+
 ## Power Sync
 
-Power sync is controlled by `/var/lib/libvirt/hooks/no-power-sync`.
+Power sync is enabled by default.
 
 ```bash
 sudo enable-power-sync
