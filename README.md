@@ -1,14 +1,19 @@
-# rishabhroyy nixconf
+# nixconf
 
-This repository contains the completely declarative NixOS configuration for a highly stealthy Windows 11 VFIO hypervisor, featuring:
-- Full AMD RX 6700 XT GPU & Audio Passthrough (Multifunction)
-- NVMe, SATA SSD, and Motherboard USB Passthrough
-- Tailscale-hardened Docker containers (Immich, Seanime, Portainer) with NVIDIA CUDA Support
-- Seamless Host-Guest Power Sync
-- Automated SOPS-Nix secret injection
+Personal NixOS flake for a single host.
 
-### Deployment Instructions
+## Contents
 
-The entire installation and bootstrapping process is documented step-by-step. 
+- NixOS host configuration with `sops-nix` secrets.
+- Libvirt/VFIO Windows 11 VM definition.
+- Docker services for media and admin tools.
+- Samba export for local storage.
 
-**Please read and follow [DEPLOYMENT.md](./DEPLOYMENT.md) to install this system.**
+## Deploy
+
+```bash
+sudo nixos-rebuild switch --flake .#rishabh-nix --cores 14
+```
+
+Most paths, PCI IDs, disk UUIDs, and firmware assets are host-specific. Review
+the files under `hosts/rishabh-nix/` before reusing this configuration elsewhere.

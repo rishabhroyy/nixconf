@@ -11,8 +11,6 @@ in
     ./containers.nix
     ./samba-ntfs.nix
     ./vfio.nix
-    ../../modules/kvm-hypercall-patch.nix
-    ../../modules/kvm-tsc-cpuid-compensate.nix
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
@@ -133,14 +131,14 @@ in
           
           # 2. Wait up to 120 seconds for the VM process to exit gracefully
           for i in {1..120}; do
-            if ! ${pkgs.libvirt}/bin/virsh list | grep -q "win11"; then
+            if ! ${pkgs.libvirt}/bin/virsh list | ${pkgs.gnugrep}/bin/grep -q "win11"; then
               break
             fi
-            sleep 1
+            ${pkgs.coreutils}/bin/sleep 1
           done
           
           # 3. Safely power off the NixOS host
-          /run/current-system/sw/bin/shutdown -h now
+          ${pkgs.systemd}/bin/shutdown -h now
         '';
       };
     };

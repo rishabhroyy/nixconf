@@ -1,5 +1,5 @@
 {
-  description = "PROJECT GHOST-HOST NixOS Configuration";
+  description = "Rishabh NixOS configuration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -9,13 +9,11 @@
 
   outputs = { self, nixpkgs, sops-nix, ... }@inputs:
   let
-    # Overlay to patch QEMU with the vmcall/hypercall quirk fix.
-    # This prevents anti-cheats (Genshin, Vanguard) from detecting the VMCALL
-    # instruction rewriting quirk and triggering a BSOD.
-    # Applies qemu-vmcall-patch/changes.patch via the standard NixOS patches mechanism.
+    # Overlay to patch QEMU with the vmcall/hypercall quirk fix and the
+    # low-risk Windows VFIO identity tweaks used by the win11 domain.
     qemuPatchedOverlay = final: prev:
     let
-      ovmfGhost = (prev.OVMF.override {
+      ovmfWin11 = (prev.OVMF.override {
         secureBoot = true;
         tpmSupport = true;
       }).overrideAttrs (old: {
@@ -28,13 +26,13 @@
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$fd/nix-support"
-          cat > "$fd/nix-support/ghost-ovmf-patches" <<'EOF'
+          cat > "$fd/nix-support/win11-ovmf-patches" <<'EOF'
 ovmf-acpi-default-oem-id=ALASKA
 ovmf-acpi-default-oem-table-id=A M I
 EOF
         '';
       });
-      applyGhostQemuPatches = pkg: pkg.overrideAttrs (old: {
+      applyWin11QemuPatches = pkg: pkg.overrideAttrs (old: {
         patches = (old.patches or []) ++ [ ./patches/qemu-disable-hypercall-quirk.patch ];
         postPatch = (old.postPatch or "") + ''
           substituteInPlace target/i386/kvm/kvm.c \
@@ -110,7 +108,7 @@ static void set_v8086_seg'
         '';
         postInstall = (old.postInstall or "") + ''
           mkdir -p "$out/nix-support"
-          cat > "$out/nix-support/ghost-qemu-patches" <<'EOF'
+          cat > "$out/nix-support/win11-qemu-patches" <<'EOF'
 qemu-vmcall-patch=present
 qemu-forced-tsc-frequency-log=absent
 qemu-acpi-oem=patched
@@ -124,8 +122,8 @@ EOF
         '';
       });
     in {
-      qemu_ghost = applyGhostQemuPatches prev.qemu_kvm;
-      ovmf_ghost = ovmfGhost;
+      qemu_win11 = applyWin11QemuPatches prev.qemu_kvm;
+      ovmf_win11 = ovmfWin11;
     };
   in
   {

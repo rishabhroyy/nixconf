@@ -869,35 +869,6 @@ static void check_windows_security_state()
     }
 }
 
-static void check_vanguard_services()
-{
-    std::cout << "\n== Vanguard Service State ==\n";
-    const std::string services = run_command(
-        "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-        "\"Get-Service -Name vgk,vgc -ErrorAction SilentlyContinue | "
-        "Select-Object Name,Status,StartType,ServiceType | Format-Table -AutoSize; "
-        "Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'vgk' } | "
-        "Select-Object Name,State,Started,StartMode,PathName | Format-List\" 2>NUL");
-
-    if (trim(services).empty()) {
-        add_finding("INFO", "Vanguard services", "vgk/vgc are not installed or not visible yet");
-        return;
-    }
-
-    std::cout << services << "\n";
-    const std::string low_services = lower(services);
-    if (low_services.find("vgk") != std::string::npos) {
-        add_finding("PASS", "Vanguard kernel driver visibility", "vgk is present in Windows service/driver inventory");
-    } else {
-        add_finding("WARN", "Vanguard kernel driver visibility", "vgk was not present in service/driver output");
-    }
-    if (low_services.find("vgc") != std::string::npos) {
-        add_finding("PASS", "Vanguard user service visibility", "vgc is present in Windows service inventory");
-    } else {
-        add_finding("INFO", "Vanguard user service visibility", "vgc was not present in service output");
-    }
-}
-
 static void check_thermal_topology()
 {
     std::cout << "\n== ACPI Thermal Topology ==\n";
@@ -1167,10 +1138,10 @@ static void print_summary()
     } else if (fail == 0) {
         std::cout << "Overall: no hard failures, but review warnings before treating the setup as ready.\n";
     } else {
-        std::cout << "Overall: hard failures remain; fix those before drawing conclusions from game/client behavior.\n";
+        std::cout << "Overall: hard failures remain; fix those before relying on this VM profile.\n";
     }
 
-    std::cout << "\nNote: this is a guest-visible VM compatibility/masking diagnostic. It does not model private anti-cheat logic.\n";
+    std::cout << "\nNote: this is a guest-visible VM compatibility diagnostic. It does not model private software policy checks.\n";
 }
 
 int main()
@@ -1186,7 +1157,6 @@ int main()
     check_acpi();
     check_tpm_secure_boot();
     check_windows_security_state();
-    check_vanguard_services();
     check_thermal_topology();
     check_memory_and_pagefile();
     check_physical_disks();

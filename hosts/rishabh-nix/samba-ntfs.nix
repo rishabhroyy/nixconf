@@ -1,4 +1,4 @@
-{ config, pkgs, ... }:
+{ ... }:
 
 {
   # Ensure the modern ntfs3 driver is supported and used
@@ -21,14 +21,15 @@
     ];
   };
 
-  # Samba share configured for the internal br0 network to map inside Windows 11
+  # Samba share for the local LAN, including the Windows VM when it is attached
+  # through the physical network.
   services.samba = {
     enable = true;
     openFirewall = true;
     settings = {
       global = {
         "workgroup" = "WORKGROUP";
-        "server string" = "Ghost-Host Samba";
+        "server string" = "rishabh-nix Samba";
         "netbios name" = "rishabh-nix";
         "security" = "user";
         # Allow access from the local LAN (VM will be on the LAN via the physical router)

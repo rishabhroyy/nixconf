@@ -5,9 +5,6 @@
   virtualisation.docker.enable = true;
   virtualisation.oci-containers.backend = "docker";
 
-  # Enable NVIDIA Container Toolkit for P620 Passthrough
-  hardware.nvidia-container-toolkit.enable = true;
-
   # Tailscale Sidecars and Services
   virtualisation.oci-containers.containers = {
     # ---------------------------------------------------------
