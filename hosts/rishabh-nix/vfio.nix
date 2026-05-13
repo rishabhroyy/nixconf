@@ -130,8 +130,9 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Power sync is controlled by /var/lib/libvirt/hooks/no-power-sync.
-    # The enable-power-sync and disable-power-sync aliases manage that marker.
+    # Power sync is enabled by default. Use disable-power-sync to create this
+    # marker when remote testing should leave the host running after VM stop.
+    rm -f /var/lib/libvirt/hooks/no-power-sync
   '';
 
   # Systemd service to define the VM from the template XML automatically

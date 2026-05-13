@@ -203,11 +203,36 @@ in
     nettools # ifconfig
     dnsutils # dig, nslookup
     ethtool
+    efibootmgr
     binutils # strings, objdump, etc.
     
     # System info
     fastfetch
     tree
+    (pkgs.writeShellScriptBin "reboot-to-windows" ''
+      set -eu
+
+      BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
+        BEGIN { IGNORECASE = 1 }
+        /^Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]/ && /Windows Boot Manager/ {
+          boot = $1
+          gsub(/^Boot/, "", boot)
+          gsub(/\*/, "", boot)
+          print boot
+          exit
+        }
+      ')"
+
+      if [ -z "$BOOTNUM" ]; then
+        echo "Could not find a UEFI entry named Windows Boot Manager." >&2
+        ${pkgs.efibootmgr}/bin/efibootmgr >&2
+        exit 1
+      fi
+
+      echo "Setting one-time UEFI BootNext to Windows Boot Manager (Boot$BOOTNUM)."
+      ${pkgs.efibootmgr}/bin/efibootmgr --bootnext "$BOOTNUM"
+      ${pkgs.systemd}/bin/systemctl reboot
+    '')
     (pkgs.writeShellScriptBin "update-containers" ''
       echo "Pulling latest images for all stacks..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
@@ -253,6 +278,7 @@ in
     disable-power-sync = "sudo touch /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync disabled.'";
     enable-power-sync = "sudo rm -f /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync enabled.'";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
+    reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
   };
 }
