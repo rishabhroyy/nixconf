@@ -2,8 +2,7 @@
 
 let
   # The devices we want to pass through to the Windows 11 VM.
-  # Keep this on the known-working global binding path while we isolate the
-  # Vanguard-specific kernel changes.
+  # Keep this on the known-working global binding path.
   vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
 in
 {
@@ -11,10 +10,11 @@ in
   boot.kernelParams = [
     "amd_iommu=on"
     "iommu=pt"
-    # Isolate Cores 2-7 and 10-15 (Physical pairs) for the Windows 11 VM
-    "isolcpus=2-7,10-15"
-    "nohz_full=2-7,10-15"
-    "rcu_nocbs=2-7,10-15"
+    # Isolate physical cores 4-7 for the Windows 11 VM.
+    # Physical cores 0-3 remain shared so NixOS has room to breathe.
+    "isolcpus=4-7,12-15"
+    "nohz_full=4-7,12-15"
+    "rcu_nocbs=4-7,12-15"
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
@@ -26,14 +26,9 @@ in
 
   powerManagement.cpuFreqGovernor = "performance";
 
-  # Enable nested virtualization for Windows VBS/Core Isolation and retry AVIC
-  # without the FIFO scheduler experiment that starved the host.
+  # Enable nested virtualization for Windows VBS/Core Isolation and AVIC as a
+  # normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
-
-  # Keep the CPUID/RDTSC compensation module available as a manual experiment,
-  # but do not load it by default. The default path uses natural VBS-style
-  # timing: invtsc + Hyper-V clock + core isolation, without TSC subtraction.
-  ghost.vfio.cpuidTscCompensation.enableAtBoot = false;
 
   # Load VFIO modules
   boot.initrd.kernelModules = [
@@ -48,7 +43,7 @@ in
     onBoot = "ignore";
     onShutdown = "shutdown";
     qemu = {
-      package = pkgs.qemu_ghost;
+      package = pkgs.qemu_win11;
       runAsRoot = true;
       swtpm.enable = false;
     };
@@ -67,11 +62,6 @@ in
       SUB_OPERATION="$3"
       HUGEPAGES_1G="16"
       HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
-      HOST_CPU_LIST="0-1,8-9"
-      HOST_CPU_MASK="303"
-      DEFAULT_IRQ_STATE="/run/libvirt/win11-default-irq-affinity.state"
-      IRQ_STATE="/run/libvirt/win11-irq-affinity.state"
-      WORKQUEUE_STATE="/run/libvirt/win11-workqueue-cpumask.state"
 
       allocate_hugepages() {
           echo "$(date): allocating $HUGEPAGES_1G 1G hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
@@ -108,61 +98,15 @@ in
           fi
       }
 
-      isolate_host_noise() {
-          mkdir -p /run/libvirt
-
-          : > "$IRQ_STATE"
-          for IRQ_AFFINITY in /proc/irq/*/smp_affinity_list; do
-              if [ -w "$IRQ_AFFINITY" ]; then
-                  ORIGINAL="$(cat "$IRQ_AFFINITY")"
-                  echo "$IRQ_AFFINITY $ORIGINAL" >> "$IRQ_STATE"
-                  echo "$HOST_CPU_LIST" > "$IRQ_AFFINITY" 2>/dev/null || true
-              fi
-          done
-
-          if [ -w /proc/irq/default_smp_affinity ]; then
-              cat /proc/irq/default_smp_affinity > "$DEFAULT_IRQ_STATE"
-              echo "$HOST_CPU_MASK" > /proc/irq/default_smp_affinity || true
-          fi
-
-          if [ -w /sys/devices/virtual/workqueue/cpumask ]; then
-              cat /sys/devices/virtual/workqueue/cpumask > "$WORKQUEUE_STATE"
-              echo "$HOST_CPU_MASK" > /sys/devices/virtual/workqueue/cpumask || true
-          fi
-      }
-
-      restore_host_noise() {
-          if [ -f "$IRQ_STATE" ]; then
-              while read -r IRQ_AFFINITY ORIGINAL; do
-                  if [ -w "$IRQ_AFFINITY" ]; then
-                      echo "$ORIGINAL" > "$IRQ_AFFINITY" 2>/dev/null || true
-                  fi
-              done < "$IRQ_STATE"
-              rm -f "$IRQ_STATE"
-          fi
-
-          if [ -f "$DEFAULT_IRQ_STATE" ] && [ -w /proc/irq/default_smp_affinity ]; then
-              cat "$DEFAULT_IRQ_STATE" > /proc/irq/default_smp_affinity || true
-              rm -f "$DEFAULT_IRQ_STATE"
-          fi
-
-          if [ -f "$WORKQUEUE_STATE" ] && [ -w /sys/devices/virtual/workqueue/cpumask ]; then
-              cat "$WORKQUEUE_STATE" > /sys/devices/virtual/workqueue/cpumask || true
-              rm -f "$WORKQUEUE_STATE"
-          fi
-      }
-
       if [ "$GUEST_NAME" == "win11" ]; then
           # Log the event for debugging
           echo "$(date): win11 $OPERATION $SUB_OPERATION" >> /tmp/qemu-hook.log
 
           if [[ "$OPERATION" == "prepare" && "$SUB_OPERATION" == "begin" ]]; then
               allocate_hugepages
-              isolate_host_noise
           fi
           
           if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
-              restore_host_noise
               release_hugepages
           fi
           
@@ -186,9 +130,8 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Keep remote testing safe. Remove this file with the enable-power-sync alias
-    # once the VM lifecycle is boring again.
-    touch /var/lib/libvirt/hooks/no-power-sync
+    # Power sync is controlled by /var/lib/libvirt/hooks/no-power-sync.
+    # The enable-power-sync and disable-power-sync aliases manage that marker.
   '';
 
   # Systemd service to define the VM from the template XML automatically
@@ -216,7 +159,7 @@ in
 
       enroll_secure_boot_keys_once() {
         NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
-        TEMPLATE=${pkgs.ovmf_ghost.variables}
+        TEMPLATE=${pkgs.ovmf_win11.variables}
         MARKER=/var/lib/libvirt/qemu/nvram/win11_VARS.fd.secureboot-enrolled
         INPUT="$NVRAM"
 
@@ -275,30 +218,14 @@ EOF
       ${pkgs.acpica-tools}/bin/iasl -ve -p /var/lib/libvirt/qemu/acpi/fake-thermal /var/lib/libvirt/qemu/acpi/fake-thermal.asl >/dev/null
       chmod 644 /var/lib/libvirt/qemu/acpi/fake-thermal.aml
 
-      for TABLE in FACP DSDT; do
-        if [ -f "/sys/firmware/acpi/tables/$TABLE" ]; then
-          cp "/sys/firmware/acpi/tables/$TABLE" "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
-          ${pkgs.perl}/bin/perl -0pi \
-            -e 's/QEMU/AMI_/g; s/BOCHS/AMI00/g; s/BXPC/AMIP/g; s/BOCH/AMI0/g' \
-            "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
-          ${pkgs.python3}/bin/python3 -c 'import sys; p=sys.argv[1]; b=bytearray(open(p, "rb").read()); b[9]=0; b[9]=(-sum(b)) & 0xff; open(p, "wb").write(b)' \
-            "/var/lib/libvirt/qemu/acpi/$TABLE.tmp"
-          if [ "$TABLE" = "DSDT" ]; then
-            mv "/var/lib/libvirt/qemu/acpi/$TABLE.tmp" /var/lib/libvirt/qemu/acpi/DSDT.aml
-          else
-            mv "/var/lib/libvirt/qemu/acpi/$TABLE.tmp" "/var/lib/libvirt/qemu/acpi/$TABLE.bin"
-          fi
-        fi
-      done
-      chmod 644 /var/lib/libvirt/qemu/acpi/FACP.bin /var/lib/libvirt/qemu/acpi/DSDT.aml 2>/dev/null || true
-      if [ ! -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing ]; then
-        rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
-        rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
-        rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      elif [ -f /var/lib/libvirt/qemu/enable-acpi-spoofing ]; then
-        echo "Retiring old full-FACP ACPI spoofing toggle name; use enable-facp-spoofing instead."
-        mv /var/lib/libvirt/qemu/enable-acpi-spoofing /var/lib/libvirt/qemu/enable-facp-spoofing
-      fi
+      # Clean slate: full host FACP/DSDT injection was too invasive for this VM.
+      # Keep only the tiny synthetic thermal SSDT and QEMU's patched ACPI headers.
+      rm -f /var/lib/libvirt/qemu/acpi/FACP.bin
+      rm -f /var/lib/libvirt/qemu/acpi/DSDT.aml
+      rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
+      rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
+      rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
+      rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
 
       if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
         echo "Updating existing win11 VM definition while preserving OVMF NVRAM..."
@@ -414,8 +341,8 @@ EOF
       export MEMORY_SERIAL="$(qemu_smbios_value "$RAW_MEMORY_SERIAL")"
       export MEMORY_PART="$(qemu_smbios_value "$RAW_MEMORY_PART")"
       export MEMORY_SPEED="$RAW_MEMORY_SPEED"
-      export OVMF_CODE="${pkgs.ovmf_ghost.firmware}"
-      export OVMF_VARS="${pkgs.ovmf_ghost.variables}"
+      export OVMF_CODE="${pkgs.ovmf_win11.firmware}"
+      export OVMF_VARS="${pkgs.ovmf_win11.variables}"
       export QEMU_SYSTEM_X86_64="${config.virtualisation.libvirtd.qemu.package}/bin/qemu-system-x86_64"
 
       export HYPERV_FEATURES="    <hyperv mode='custom'>
@@ -443,28 +370,6 @@ EOF
     <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/fake-thermal.aml'/>
     <qemu:arg value='-smbios'/>
     <qemu:arg value='type=17,loc_pfx=DIMM,bank=BANK,manufacturer=$MEMORY_MANUFACTURER,serial=$MEMORY_SERIAL,asset=$MEMORY_SERIAL,part=$MEMORY_PART,speed=$MEMORY_SPEED'/>"
-      if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then
-        if [ ! -f /var/lib/libvirt/qemu/acpi/FACP.bin ]; then
-          echo "Legacy FACP spoofing is enabled, but /var/lib/libvirt/qemu/acpi/FACP.bin is missing"
-          exit 1
-        fi
-
-        QEMU_COMMANDLINE="$QEMU_COMMANDLINE
-    <qemu:arg value='-acpitable'/>
-    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/FACP.bin'/>"
-
-        if [ -f /var/lib/libvirt/qemu/enable-dsdt-spoofing ]; then
-          if [ ! -f /var/lib/libvirt/qemu/acpi/DSDT.aml ]; then
-            echo "DSDT spoofing is enabled, but /var/lib/libvirt/qemu/acpi/DSDT.aml is missing"
-            exit 1
-          fi
-
-          QEMU_COMMANDLINE="$QEMU_COMMANDLINE
-    <qemu:arg value='-acpitable'/>
-    <qemu:arg value='file=/var/lib/libvirt/qemu/acpi/DSDT.aml'/>"
-        fi
-
-      fi
       QEMU_COMMANDLINE="$QEMU_COMMANDLINE
   </qemu:commandline>"
       export QEMU_COMMANDLINE
@@ -499,7 +404,7 @@ EOF
     tpm2-tools
     python3Packages.virt-firmware
     acpica-tools
-    (pkgs.writeShellScriptBin "enable-win11-acpi-spoofing" ''
+    (pkgs.writeShellScriptBin "reset-win11-vm-definition" ''
       set -eu
 
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
@@ -512,86 +417,8 @@ EOF
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "ACPI spoofing is now the safe QEMU-header mode: no full host FACP/DSDT tables are injected."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
-    '')
-    (pkgs.writeShellScriptBin "enable-win11-legacy-facp-spoofing" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining ACPI tables." >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
-    '')
-    (pkgs.writeShellScriptBin "enable-win11-legacy-dsdt-spoofing" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining ACPI tables." >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/mkdir -p /var/lib/libvirt/qemu
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-facp-spoofing
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
-    '')
-    (pkgs.writeShellScriptBin "disable-win11-acpi-spoofing" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining ACPI tables." >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
-    '')
-    (pkgs.writeShellScriptBin "enable-win11-hyperv-features" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
-        exit 1
-      fi
-
-      # Clear older A/B marker files; the VM definition now always emits the
-      # maximal AMD-compatible Hyper-V enlightenment set.
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "Windows Hyper-V/VBS support is enabled in the maximal VM definition."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
-    '')
-    (pkgs.writeShellScriptBin "enable-win11-aggressive-hyperv-features" ''
-      set -eu
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining Hyper-V features." >&2
-        exit 1
-      fi
-
-      # Compatibility alias for the old A/B command name.
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/disable-win11-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-stable-hyperv-features
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-win11-aggressive-hyperv-features
-      ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
-      echo "Aggressive nested Hyper-V enlightenment profile is enabled."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|hypervclock|feature policy=.require. name=.svm.|feature policy=.disable. name=.svm.' || true
+      echo "win11 VM definition reset to the default stable profile."
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure|<hyperv|hypervclock|qemu:commandline|timer name=.tsc.|feature policy=.require. name=.svm.|feature policy=.disable. name=.hypervisor.' || true
     '')
     (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
       set -eu
@@ -623,7 +450,7 @@ EOF
       fi
 
       NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
-      TEMPLATE=${pkgs.ovmf_ghost.variables}
+      TEMPLATE=${pkgs.ovmf_win11.variables}
       INPUT="$NVRAM"
 
       if [ ! -f "$INPUT" ]; then
@@ -687,9 +514,9 @@ EOF
       if [ -n "$XML_QEMU" ] && [ -x "$XML_QEMU" ]; then
         QEMU_OUT="$(${pkgs.coreutils}/bin/dirname "$(${pkgs.coreutils}/bin/dirname "$XML_QEMU")")"
         echo "out: $QEMU_OUT"
-        if [ -f "$QEMU_OUT/nix-support/ghost-qemu-patches" ]; then
+        if [ -f "$QEMU_OUT/nix-support/win11-qemu-patches" ]; then
           echo "qemu-patched-derivation-marker=present"
-          ${pkgs.coreutils}/bin/cat "$QEMU_OUT/nix-support/ghost-qemu-patches"
+          ${pkgs.coreutils}/bin/cat "$QEMU_OUT/nix-support/win11-qemu-patches"
         else
           echo "qemu-patched-derivation-marker=missing"
         fi
@@ -720,9 +547,7 @@ EOF
       echo "== TSC =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
       ${pkgs.coreutils}/bin/echo "tsc-frequency=unforced"
-      ${pkgs.coreutils}/bin/printf 'kvm-tsc-cpuid-compensate.enabled='
-      ${pkgs.coreutils}/bin/cat /sys/module/kvm_tsc_cpuid_compensate/parameters/enabled 2>/dev/null || ${pkgs.coreutils}/bin/echo unloaded
-      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch|tsc exit compensation active|kvm-tsc-cpuid-compensate' || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
       ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep 'qemu-acpi-oem-patch=ALASKA,A M I' || true
 
       echo
@@ -731,16 +556,16 @@ EOF
       OVMF_LOADER="$(${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnused}/bin/sed -n 's:.*<loader[^>]*>\(.*\)</loader>.*:\1:p')"
       if [ -n "$OVMF_LOADER" ] && [ -f "$OVMF_LOADER" ]; then
         ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-copy='
-        if [ "$OVMF_LOADER" = "${pkgs.ovmf_ghost.firmware}" ]; then
+        if [ "$OVMF_LOADER" = "${pkgs.ovmf_win11.firmware}" ]; then
           ${pkgs.coreutils}/bin/echo present
         else
           ${pkgs.coreutils}/bin/echo missing
         fi
         OVMF_OUT="$(${pkgs.coreutils}/bin/dirname "$(${pkgs.coreutils}/bin/dirname "$OVMF_LOADER")")"
         ${pkgs.coreutils}/bin/printf 'ovmf-acpi-identity-derivation-marker='
-        if [ -f "$OVMF_OUT/nix-support/ghost-ovmf-patches" ]; then
+        if [ -f "$OVMF_OUT/nix-support/win11-ovmf-patches" ]; then
           ${pkgs.coreutils}/bin/echo patched
-          ${pkgs.coreutils}/bin/cat "$OVMF_OUT/nix-support/ghost-ovmf-patches"
+          ${pkgs.coreutils}/bin/cat "$OVMF_OUT/nix-support/win11-ovmf-patches"
         else
           ${pkgs.coreutils}/bin/echo missing
         fi
@@ -770,13 +595,9 @@ EOF
 
       echo
       echo "== ACPI =="
-      echo "acpi-spoofing=qemu-header-patch"
-      ${pkgs.coreutils}/bin/printf 'allow-legacy-acpi-spoofing='
-      if [ -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
-      ${pkgs.coreutils}/bin/printf 'legacy-facp-spoofing='
-      if [ -f /var/lib/libvirt/qemu/enable-facp-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
-      ${pkgs.coreutils}/bin/printf 'legacy-dsdt-spoofing='
-      if [ -f /var/lib/libvirt/qemu/enable-dsdt-spoofing ]; then ${pkgs.coreutils}/bin/echo on; else ${pkgs.coreutils}/bin/echo off; fi
+      echo "acpi-identity=qemu-header-patch"
+      echo "acpi-table-injection=fake-thermal-only"
+      echo "legacy-facp-dsdt-injection=removed"
       ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
 
@@ -784,8 +605,7 @@ EOF
       echo "== CPU affinity =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|vcpusched|emulatorsched' || true
-      ${pkgs.coreutils}/bin/cat /proc/irq/default_smp_affinity 2>/dev/null || true
-      ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
+      echo "runtime-irq-workqueue-repinning=removed"
 
       echo
       echo "== Hugepages =="
