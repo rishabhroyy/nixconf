@@ -92,3 +92,8 @@ sudo smbpasswd -a rishabh
 ```
 
 If local name resolution fails, use the host LAN IP instead of the NetBIOS name.
+
+## Tailscale
+
+The host advertises itself as an exit node. Approve the route in the Tailscale
+admin console, then select this machine as the exit node from a client.

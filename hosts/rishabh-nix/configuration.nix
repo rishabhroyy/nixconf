@@ -26,8 +26,14 @@ in
   networking.useDHCP = true;
 
   # Tailscale
-  services.tailscale.enable = true;
-  services.tailscale.authKeyFile = config.sops.secrets.tailscale_auth_key.path;
+  services.tailscale = {
+    enable = true;
+    authKeyFile = config.sops.secrets.tailscale_auth_key.path;
+    useRoutingFeatures = "server";
+    extraUpFlags = [
+      "--advertise-exit-node"
+    ];
+  };
 
   # Enable SSH
   services.openssh = {
