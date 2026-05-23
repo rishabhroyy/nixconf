@@ -389,8 +389,31 @@ EOF
       ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" /tmp/win11-resolved.xml
 
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
-      ${pkgs.libvirt}/bin/virsh autostart win11
+      ${pkgs.libvirt}/bin/virsh autostart --disable win11 >/dev/null 2>&1 || true
       rm /tmp/win11-resolved.xml
+    '';
+  };
+
+  systemd.services.start-win11-vm = {
+    description = "Start Windows 11 VFIO VM";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "define-win11-vm.service" "network-online.target" ];
+    wants = [ "network-online.target" ];
+    requires = [ "define-win11-vm.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is already running."
+        exit 0
+      fi
+
+      # Give udev, vfio-pci, TPM, and libvirt hook installation a short window
+      # to settle after host boot before binding the passthrough stack.
+      ${pkgs.coreutils}/bin/sleep 15
+      ${pkgs.libvirt}/bin/virsh start win11
     '';
   };
 
