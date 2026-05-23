@@ -4,6 +4,15 @@ let
   # The devices we want to pass through to the Windows 11 VM.
   # Keep this on the known-working global binding path.
   vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
+  win11PciDevices = [
+    "0000:2f:00.0"
+    "0000:2f:00.1"
+    "0000:22:00.0"
+    "0000:26:00.0"
+    "0000:2a:00.1"
+    "0000:2a:00.3"
+    "0000:29:00.0"
+  ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -47,6 +56,54 @@ in
       runAsRoot = true;
       swtpm.enable = false;
     };
+  };
+
+  systemd.services.wait-win11-vfio-devices = {
+    description = "Wait for Windows 11 VFIO host devices";
+    before = [ "libvirtd.service" ];
+    after = [ "systemd-udev-settle.service" ];
+    wants = [ "systemd-udev-settle.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      PCI_DEVICES="${builtins.concatStringsSep " " win11PciDevices}"
+
+      for attempt in $(${pkgs.coreutils}/bin/seq 1 45); do
+        MISSING=""
+
+        for DEV in $PCI_DEVICES; do
+          if [ ! -e "/sys/bus/pci/devices/$DEV" ]; then
+            MISSING="$MISSING $DEV"
+          fi
+        done
+
+        if [ ! -e /dev/vfio/vfio ]; then
+          MISSING="$MISSING /dev/vfio/vfio"
+        fi
+
+        if [ ! -e /dev/tpmrm0 ]; then
+          MISSING="$MISSING /dev/tpmrm0"
+        fi
+
+        if [ -z "$MISSING" ]; then
+          echo "Windows 11 VFIO host devices are present."
+          exit 0
+        fi
+
+        echo "Waiting for Windows 11 VFIO host devices:$MISSING"
+        ${pkgs.coreutils}/bin/sleep 1
+      done
+
+      echo "Timed out waiting for Windows 11 VFIO host devices:$MISSING" >&2
+      exit 1
+    '';
+  };
+
+  systemd.services.libvirtd = {
+    after = [ "wait-win11-vfio-devices.service" ];
+    requires = [ "wait-win11-vfio-devices.service" ];
   };
 
   services.udev.extraRules = ''
@@ -130,56 +187,20 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Keep remote recovery safe by default. Remove this marker with
-    # enable-power-sync when VM shutdown should power off the host.
-    touch /var/lib/libvirt/hooks/no-power-sync
+    if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
+       ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
+      touch /var/lib/libvirt/hooks/no-power-sync
+    else
+      rm -f /var/lib/libvirt/hooks/no-power-sync
+    fi
   '';
 
   # Systemd service to define the VM from the template XML automatically
-  systemd.services.prepare-win11-hugepages = {
-    description = "Prepare 1G hugepages for Windows 11 VFIO VM";
-    wantedBy = [ "multi-user.target" ];
-    before = [ "docker.service" "libvirtd.service" "define-win11-vm.service" "start-win11-vm.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-    script = ''
-      HUGEPAGES_1G="16"
-      HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
-      HUGEPAGES_FREE_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages"
-
-      if [ ! -w "$HUGEPAGES_1G_PATH" ]; then
-        echo "1G hugepages are not available at $HUGEPAGES_1G_PATH" >&2
-        exit 1
-      fi
-
-      ATTEMPT=1
-      while [ "$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")" -lt "$HUGEPAGES_1G" ] && [ "$ATTEMPT" -le 10 ]; do
-        ${pkgs.coreutils}/bin/echo 1 > /proc/sys/vm/compact_memory || true
-        ${pkgs.coreutils}/bin/echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
-        if [ "$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")" -lt "$HUGEPAGES_1G" ]; then
-          ${pkgs.coreutils}/bin/sleep 1
-        fi
-        ATTEMPT=$((ATTEMPT + 1))
-      done
-
-      FREE="$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")"
-      if [ "$FREE" -lt "$HUGEPAGES_1G" ]; then
-        echo "Failed to prepare $HUGEPAGES_1G free 1G hugepages; only $FREE free." >&2
-        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2
-        exit 1
-      fi
-
-      echo "Prepared $FREE free 1G hugepages for win11."
-    '';
-  };
-
   systemd.services.define-win11-vm = {
     description = "Define Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "prepare-win11-hugepages.service" "libvirtd.service" ];
-    requires = [ "prepare-win11-hugepages.service" "libvirtd.service" ];
+    after = [ "libvirtd.service" ];
+    requires = [ "libvirtd.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -428,54 +449,8 @@ EOF
       ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" /tmp/win11-resolved.xml
 
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
-      ${pkgs.libvirt}/bin/virsh autostart --disable win11 >/dev/null 2>&1 || true
+      ${pkgs.libvirt}/bin/virsh autostart win11 >/dev/null 2>&1 || true
       rm /tmp/win11-resolved.xml
-    '';
-  };
-
-  systemd.services.start-win11-vm = {
-    description = "Start Windows 11 VFIO VM";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "prepare-win11-hugepages.service" "define-win11-vm.service" "network-online.target" ];
-    wants = [ "network-online.target" ];
-    requires = [ "prepare-win11-hugepages.service" "define-win11-vm.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-    script = ''
-      if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_autostart=1' /proc/cmdline || \
-         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-autostart' /proc/cmdline; then
-        echo "win11 autostart disabled by kernel command line."
-        exit 0
-      fi
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is already running."
-        exit 0
-      fi
-
-      # Failed-start cleanup must never power off the host. Power sync is only
-      # re-enabled after the VM survives the boot grace period below.
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
-
-      ${pkgs.coreutils}/bin/sleep 15
-      FREE_HUGEPAGES="$(${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || ${pkgs.coreutils}/bin/echo 0)"
-      if [ "$FREE_HUGEPAGES" -lt 16 ]; then
-        echo "Refusing to start win11: only $FREE_HUGEPAGES free 1G hugepages are available." >&2
-        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2
-        exit 1
-      fi
-
-      ${pkgs.libvirt}/bin/virsh start win11
-
-      ${pkgs.coreutils}/bin/sleep 120
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/hooks/no-power-sync
-        echo "win11 survived boot grace period; power sync enabled."
-      else
-        echo "win11 did not remain running; power sync left disabled."
-      fi
     '';
   };
 

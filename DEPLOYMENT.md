@@ -28,12 +28,15 @@ available at activation time.
 Useful host-side checks:
 
 ```bash
-sudo systemctl status prepare-win11-hugepages.service
+sudo systemctl status wait-win11-vfio-devices.service
 sudo systemctl status define-win11-vm.service
-sudo systemctl status start-win11-vm.service
 sudo virsh list --all
 sudo verify-win11-vfio
 ```
+
+Libvirt owns VM autostart. The `wait-win11-vfio-devices.service` unit runs
+before libvirt so autostart does not begin until the host-side PCI, VFIO, and
+TPM devices are present.
 
 Useful maintenance helpers:
 
@@ -67,8 +70,7 @@ than a permanent boot order edit.
 
 ## Power Sync
 
-Power sync is disabled during VM autostart and enabled automatically after the
-VM stays running through its boot grace period.
+Power sync is enabled by default during activation.
 
 ```bash
 sudo enable-power-sync
@@ -80,17 +82,17 @@ When the marker exists, VM shutdown leaves the host running. The physical power
 button path still asks the VM to shut down first, waits briefly, then powers off
 the host.
 
-To skip VM autostart for one boot, edit the boot entry and add either kernel
+To disable power sync for one boot, edit the boot entry and add either kernel
 parameter:
 
 ```text
-win11.no_autostart=1
+win11.no_power_sync=1
 ```
 
 or:
 
 ```text
-no-win11-autostart
+no-win11-power-sync
 ```
 
 ## Samba
