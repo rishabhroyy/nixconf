@@ -136,11 +136,50 @@ in
   '';
 
   # Systemd service to define the VM from the template XML automatically
+  systemd.services.prepare-win11-hugepages = {
+    description = "Prepare 1G hugepages for Windows 11 VFIO VM";
+    wantedBy = [ "multi-user.target" ];
+    before = [ "docker.service" "libvirtd.service" "define-win11-vm.service" "start-win11-vm.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      HUGEPAGES_1G="16"
+      HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+      HUGEPAGES_FREE_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages"
+
+      if [ ! -w "$HUGEPAGES_1G_PATH" ]; then
+        echo "1G hugepages are not available at $HUGEPAGES_1G_PATH" >&2
+        exit 1
+      fi
+
+      ATTEMPT=1
+      while [ "$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")" -lt "$HUGEPAGES_1G" ] && [ "$ATTEMPT" -le 10 ]; do
+        ${pkgs.coreutils}/bin/echo 1 > /proc/sys/vm/compact_memory || true
+        ${pkgs.coreutils}/bin/echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
+        if [ "$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")" -lt "$HUGEPAGES_1G" ]; then
+          ${pkgs.coreutils}/bin/sleep 1
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+      done
+
+      FREE="$(${pkgs.coreutils}/bin/cat "$HUGEPAGES_FREE_PATH")"
+      if [ "$FREE" -lt "$HUGEPAGES_1G" ]; then
+        echo "Failed to prepare $HUGEPAGES_1G free 1G hugepages; only $FREE free." >&2
+        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2
+        exit 1
+      fi
+
+      echo "Prepared $FREE free 1G hugepages for win11."
+    '';
+  };
+
   systemd.services.define-win11-vm = {
     description = "Define Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" ];
-    requires = [ "libvirtd.service" ];
+    after = [ "prepare-win11-hugepages.service" "libvirtd.service" ];
+    requires = [ "prepare-win11-hugepages.service" "libvirtd.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -397,9 +436,9 @@ EOF
   systemd.services.start-win11-vm = {
     description = "Start Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "define-win11-vm.service" "network-online.target" ];
+    after = [ "prepare-win11-hugepages.service" "define-win11-vm.service" "network-online.target" ];
     wants = [ "network-online.target" ];
-    requires = [ "define-win11-vm.service" ];
+    requires = [ "prepare-win11-hugepages.service" "define-win11-vm.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -421,6 +460,13 @@ EOF
       ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
 
       ${pkgs.coreutils}/bin/sleep 15
+      FREE_HUGEPAGES="$(${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || ${pkgs.coreutils}/bin/echo 0)"
+      if [ "$FREE_HUGEPAGES" -lt 16 ]; then
+        echo "Refusing to start win11: only $FREE_HUGEPAGES free 1G hugepages are available." >&2
+        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2
+        exit 1
+      fi
+
       ${pkgs.libvirt}/bin/virsh start win11
 
       ${pkgs.coreutils}/bin/sleep 120

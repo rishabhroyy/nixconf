@@ -28,6 +28,7 @@ available at activation time.
 Useful host-side checks:
 
 ```bash
+sudo systemctl status prepare-win11-hugepages.service
 sudo systemctl status define-win11-vm.service
 sudo systemctl status start-win11-vm.service
 sudo virsh list --all
