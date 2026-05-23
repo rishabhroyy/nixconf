@@ -66,7 +66,8 @@ than a permanent boot order edit.
 
 ## Power Sync
 
-Power sync is enabled by default.
+Power sync is disabled during VM autostart and enabled automatically after the
+VM stays running through its boot grace period.
 
 ```bash
 sudo enable-power-sync
@@ -77,6 +78,19 @@ When the marker is absent, stopping the Windows VM powers off the NixOS host.
 When the marker exists, VM shutdown leaves the host running. The physical power
 button path still asks the VM to shut down first, waits briefly, then powers off
 the host.
+
+To skip VM autostart for one boot, edit the boot entry and add either kernel
+parameter:
+
+```text
+win11.no_autostart=1
+```
+
+or:
+
+```text
+no-win11-autostart
+```
 
 ## Samba
 
