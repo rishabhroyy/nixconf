@@ -4,15 +4,6 @@ let
   # The devices we want to pass through to the Windows 11 VM.
   # Keep this on the known-working global binding path.
   vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
-  win11PciDevices = [
-    "0000:2f:00.0"
-    "0000:2f:00.1"
-    "0000:22:00.0"
-    "0000:26:00.0"
-    "0000:2a:00.1"
-    "0000:2a:00.3"
-    "0000:29:00.0"
-  ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -56,54 +47,6 @@ in
       runAsRoot = true;
       swtpm.enable = false;
     };
-  };
-
-  systemd.services.wait-win11-vfio-devices = {
-    description = "Wait for Windows 11 VFIO host devices";
-    before = [ "libvirtd.service" ];
-    after = [ "systemd-udev-settle.service" ];
-    wants = [ "systemd-udev-settle.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-    script = ''
-      PCI_DEVICES="${builtins.concatStringsSep " " win11PciDevices}"
-
-      for attempt in $(${pkgs.coreutils}/bin/seq 1 45); do
-        MISSING=""
-
-        for DEV in $PCI_DEVICES; do
-          if [ ! -e "/sys/bus/pci/devices/$DEV" ]; then
-            MISSING="$MISSING $DEV"
-          fi
-        done
-
-        if [ ! -e /dev/vfio/vfio ]; then
-          MISSING="$MISSING /dev/vfio/vfio"
-        fi
-
-        if [ ! -e /dev/tpmrm0 ]; then
-          MISSING="$MISSING /dev/tpmrm0"
-        fi
-
-        if [ -z "$MISSING" ]; then
-          echo "Windows 11 VFIO host devices are present."
-          exit 0
-        fi
-
-        echo "Waiting for Windows 11 VFIO host devices:$MISSING"
-        ${pkgs.coreutils}/bin/sleep 1
-      done
-
-      echo "Timed out waiting for Windows 11 VFIO host devices:$MISSING" >&2
-      exit 1
-    '';
-  };
-
-  systemd.services.libvirtd = {
-    after = [ "wait-win11-vfio-devices.service" ];
-    requires = [ "wait-win11-vfio-devices.service" ];
   };
 
   services.udev.extraRules = ''
@@ -187,12 +130,9 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
-       ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
-      touch /var/lib/libvirt/hooks/no-power-sync
-    else
-      rm -f /var/lib/libvirt/hooks/no-power-sync
-    fi
+    # Keep power sync suppressed until the post-autostart reboot service has
+    # verified that the guest survived its boot sequence.
+    touch /var/lib/libvirt/hooks/no-power-sync
   '';
 
   # Systemd service to define the VM from the template XML automatically
@@ -451,6 +391,47 @@ EOF
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
       ${pkgs.libvirt}/bin/virsh autostart win11 >/dev/null 2>&1 || true
       rm /tmp/win11-resolved.xml
+    '';
+  };
+
+  systemd.services.reboot-win11-after-libvirt-autostart = {
+    description = "Reboot Windows 11 after libvirt autostart settles";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "libvirtd.service" "define-win11-vm.service" ];
+    requires = [ "libvirtd.service" "define-win11-vm.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      power_sync_forced_off() {
+        ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
+        ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline
+      }
+
+      # Failed autostart/reboot cleanup must never power off the host.
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
+
+      ${pkgs.coreutils}/bin/sleep 20
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is running after libvirt autostart; sending one guest reboot."
+        ${pkgs.libvirt}/bin/virsh reboot win11
+      else
+        echo "win11 is not running after libvirt autostart; power sync left disabled."
+        exit 0
+      fi
+
+      ${pkgs.coreutils}/bin/sleep 120
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        if power_sync_forced_off; then
+          echo "win11 survived warm reboot; power sync kept disabled by kernel command line."
+        else
+          ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/hooks/no-power-sync
+          echo "win11 survived warm reboot; power sync enabled."
+        fi
+      else
+        echo "win11 did not remain running after warm reboot; power sync left disabled."
+      fi
     '';
   };
 
