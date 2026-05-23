@@ -110,7 +110,7 @@ in
               release_hugepages
           fi
           
-          if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
+          if [[ "$OPERATION" == "stopped" ]]; then
               # Only power off if the lock file does NOT exist
               if [ ! -f /var/lib/libvirt/hooks/no-power-sync ]; then
                   echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
