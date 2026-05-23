@@ -25,6 +25,7 @@
         "--cap-add=NET_ADMIN"
         "--cap-add=NET_RAW"
       ];
+      ports = [ "2283:2283" ];
     };
 
     immich-server = {

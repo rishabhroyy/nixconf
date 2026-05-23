@@ -29,6 +29,7 @@ Useful host-side checks:
 
 ```bash
 sudo systemctl status define-win11-vm.service
+sudo systemctl status start-win11-vm.service
 sudo virsh list --all
 sudo verify-win11-vfio
 ```
@@ -92,6 +93,12 @@ sudo smbpasswd -a rishabh
 ```
 
 If local name resolution fails, use the host LAN IP instead of the NetBIOS name.
+
+Immich is also exposed on the local network:
+
+```text
+http://rishabh-nix:2283
+```
 
 ## Tailscale
 
