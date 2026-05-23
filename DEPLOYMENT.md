@@ -28,15 +28,15 @@ available at activation time.
 Useful host-side checks:
 
 ```bash
-sudo systemctl status wait-win11-vfio-devices.service
 sudo systemctl status define-win11-vm.service
+sudo systemctl status reboot-win11-after-libvirt-autostart.service
 sudo virsh list --all
 sudo verify-win11-vfio
 ```
 
-Libvirt owns VM autostart. The `wait-win11-vfio-devices.service` unit runs
-before libvirt so autostart does not begin until the host-side PCI, VFIO, and
-TPM devices are present.
+Libvirt owns VM autostart. After libvirt starts the guest, a one-shot service
+waits 20 seconds, sends one `virsh reboot win11`, then enables power sync only
+if the guest is still running after the warm-reboot grace period.
 
 Useful maintenance helpers:
 
@@ -70,7 +70,8 @@ than a permanent boot order edit.
 
 ## Power Sync
 
-Power sync is enabled by default during activation.
+Power sync is suppressed during VM autostart and enabled automatically only
+after the warm-reboot service confirms the guest is still running.
 
 ```bash
 sudo enable-power-sync
