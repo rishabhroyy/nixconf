@@ -130,9 +130,9 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Power sync is enabled by default. Use disable-power-sync to create this
-    # marker when remote testing should leave the host running after VM stop.
-    rm -f /var/lib/libvirt/hooks/no-power-sync
+    # Keep remote recovery safe by default. Remove this marker with
+    # enable-power-sync when VM shutdown should power off the host.
+    touch /var/lib/libvirt/hooks/no-power-sync
   '';
 
   # Systemd service to define the VM from the template XML automatically
@@ -405,15 +405,31 @@ EOF
       RemainAfterExit = true;
     };
     script = ''
+      if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_autostart=1' /proc/cmdline || \
+         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-autostart' /proc/cmdline; then
+        echo "win11 autostart disabled by kernel command line."
+        exit 0
+      fi
+
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
         echo "win11 is already running."
         exit 0
       fi
 
-      # Give udev, vfio-pci, TPM, and libvirt hook installation a short window
-      # to settle after host boot before binding the passthrough stack.
+      # Failed-start cleanup must never power off the host. Power sync is only
+      # re-enabled after the VM survives the boot grace period below.
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
+
       ${pkgs.coreutils}/bin/sleep 15
       ${pkgs.libvirt}/bin/virsh start win11
+
+      ${pkgs.coreutils}/bin/sleep 120
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/hooks/no-power-sync
+        echo "win11 survived boot grace period; power sync enabled."
+      else
+        echo "win11 did not remain running; power sync left disabled."
+      fi
     '';
   };
 
