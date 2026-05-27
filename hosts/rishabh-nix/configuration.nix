@@ -76,6 +76,7 @@ in
   sops.secrets.motherboard_serial = {};
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
+  sops.secrets.copyparty_password = {};
   
   # Dynamically generate the Immich stack.env file natively from the Nix configuration
   sops.templates."immich.env".content = ''
@@ -92,6 +93,28 @@ in
   sops.templates."tailscale.env".content = ''
     TS_AUTHKEY=${config.sops.placeholder.tailscale_auth_key}
   '';
+
+  sops.templates."copyparty.conf" = {
+    owner = "rishabh";
+    mode = "0400";
+    content = ''
+      [global]
+        e2dsa
+        e2ts
+        hist: /cfg/hists/
+
+      [accounts]
+        rishabh: ${config.sops.placeholder.copyparty_password}
+
+      [/]
+        /w
+        accs:
+          r: *
+          rwmda: rishabh
+        flags:
+          grid
+    '';
+  };
 
   # User password needs to be decrypted earlier in the boot process
   sops.secrets.user_password.neededForUsers = true;
@@ -170,8 +193,15 @@ in
     "d /var/lib/tailscale-immich 0755 root root -"
     "d /var/lib/tailscale-seanime 0755 root root -"
     "d /var/lib/tailscale-portainer 0755 root root -"
+    "d /var/lib/tailscale-copyparty 0755 root root -"
     "d /var/lib/immich 0755 1000 1000 -"
+    "d /var/lib/copyparty 0755 1000 100 -"
   ];
+
+  systemd.services.docker-copyparty = lib.mkIf (!recoveryMode) {
+    after = [ "mnt-data4.mount" ];
+    requires = [ "mnt-data4.mount" ];
+  };
 
   # ---------------------------------------------------------
   # System Auto-Update & Maintenance
@@ -245,6 +275,7 @@ in
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
       ${pkgs.docker}/bin/docker pull umagistr/seanime:latest-cuda
       ${pkgs.docker}/bin/docker pull portainer/portainer-ce:latest
+      ${pkgs.docker}/bin/docker pull copyparty/ac:latest
       ${pkgs.docker}/bin/docker pull caddy:alpine
       ${pkgs.docker}/bin/docker pull tailscale/tailscale:latest
       
@@ -267,6 +298,11 @@ in
       systemctl restart docker-tailscale-portainer.service \
                         docker-portainer.service \
                         docker-portainer-proxy.service
+
+      # Copyparty Stack
+      systemctl restart docker-tailscale-copyparty.service \
+                        docker-copyparty.service \
+                        docker-copyparty-proxy.service
       
       echo "All containers updated and restarted!"
     '')

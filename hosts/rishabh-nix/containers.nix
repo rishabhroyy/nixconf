@@ -1,4 +1,4 @@
-{ config, pkgs, ... }:
+{ config, ... }:
 
 {
   # Enable Docker
@@ -184,6 +184,53 @@
         "--network=container:tailscale-portainer"
       ];
       cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:9000" ];
+    };
+
+    # ---------------------------------------------------------
+    # Copyparty
+    # ---------------------------------------------------------
+    tailscale-copyparty = {
+      image = "tailscale/tailscale:latest";
+      environmentFiles = [ config.sops.templates."tailscale.env".path ];
+      environment = {
+        TS_HOSTNAME = "copyparty";
+        TS_STATE_DIR = "/var/lib/tailscale";
+      };
+      volumes = [
+        "/dev/net/tun:/dev/net/tun"
+        "/var/lib/tailscale-copyparty:/var/lib/tailscale"
+      ];
+      extraOptions = [
+        "--cap-add=NET_ADMIN"
+        "--cap-add=NET_RAW"
+      ];
+    };
+
+    copyparty = {
+      image = "copyparty/ac:latest";
+      dependsOn = [ "tailscale-copyparty" ];
+      extraOptions = [
+        "--network=container:tailscale-copyparty"
+        "--user=1000:100"
+      ];
+      environment = {
+        PRTY_CONFIG = "/copyparty.conf";
+        TZ = "America/Los_Angeles";
+      };
+      volumes = [
+        "/mnt/data4:/w"
+        "/var/lib/copyparty:/cfg"
+        "${config.sops.templates."copyparty.conf".path}:/copyparty.conf:ro"
+      ];
+    };
+
+    copyparty-proxy = {
+      image = "caddy:alpine";
+      dependsOn = [ "tailscale-copyparty" ];
+      extraOptions = [
+        "--network=container:tailscale-copyparty"
+      ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:3923" ];
     };
 
   };
