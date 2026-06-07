@@ -322,8 +322,8 @@ in
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
-    disable-power-sync = "sudo touch /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync disabled.'";
-    enable-power-sync = "sudo rm -f /var/lib/libvirt/hooks/no-power-sync && echo 'Power sync enabled.'";
+    disable-power-sync = "sudo systemctl stop win11-power-sync-monitor.service && echo 'Power sync disabled.'";
+    enable-power-sync = "sudo systemctl start win11-power-sync-monitor.service && echo 'Power sync enabled.'";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
     reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";

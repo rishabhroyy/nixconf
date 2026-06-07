@@ -30,15 +30,22 @@ Useful host-side checks:
 ```bash
 sudo systemctl status define-win11-vm.service
 sudo systemctl status start-win11-vm.service
+sudo systemctl status win11-power-sync-monitor.service
 sudo virsh list --all
 sudo verify-win11-vfio
 ```
 
 The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
 independent autostart path, waits for the generated VM definition, verifies the
-passthrough stack, starts Windows, applies the host-specific early TianoCore
-reset after a 30-second device-initialization delay, and enables power sync
-after the guest survives its startup grace period.
+passthrough stack and physical TPM readiness after udev/network startup, starts
+Windows paused, waits 30 seconds for VFIO devices to settle without running
+guest code, then resumes Windows once. It never resets, reboots, destroys, or
+retries the guest automatically.
+
+The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
+events. It powers off NixOS only after libvirt reports the specific normal
+shutdown reason `Stopped Shutdown`. Crashes, forced stops, failed boots, and
+stuck firmware leave NixOS running.
 
 Useful maintenance helpers:
 
@@ -52,6 +59,11 @@ sudo reboot-to-windows
 
 `reset-win11-secureboot-nvram` replaces the VM's persistent OVMF variables, so
 use it only when firmware variables are broken or intentionally being reset.
+
+After the previous forced resets, allow Windows Automatic Repair to finish or
+boot Windows bare-metal once before returning to VFIO. Do not use `virsh reset`
+as a recovery action; inspect `sudo verify-win11-vfio` and the service journal
+instead.
 
 ## One-Time Boot Switching
 
@@ -72,18 +84,16 @@ than a permanent boot order edit.
 
 ## Power Sync
 
-Power sync is suppressed during VM startup and enabled automatically after the
-guest remains running through its startup grace period.
+Power sync is entirely host-side. A clean Windows shutdown powers off NixOS;
+other VM stop reasons leave NixOS running.
 
 ```bash
 sudo enable-power-sync
 sudo disable-power-sync
 ```
 
-When the marker is absent, stopping the Windows VM powers off the NixOS host.
-When the marker exists, VM shutdown leaves the host running. The physical power
-button path still asks the VM to shut down first, waits briefly, then powers off
-the host.
+The physical power button path still asks the VM to shut down first, waits
+briefly, then powers off the host.
 
 To skip VM autostart for one boot, edit the boot entry and add either:
 
