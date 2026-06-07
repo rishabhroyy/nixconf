@@ -13,7 +13,13 @@ let
     "0000:2a:00.3"
     "0000:29:00.0"
   ];
-  win11UsbControllers = [ "0000:2a:00.1" "0000:2a:00.3" ];
+  win11EarlyBoundDevices = [
+    "0000:2f:00.0"
+    "0000:2f:00.1"
+    "0000:22:00.0"
+    "0000:26:00.0"
+    "0000:29:00.0"
+  ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -434,22 +440,13 @@ EOF
         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline
       }
 
-      bind_vfio_device() {
+      verify_vfio_binding() {
         DEVICE="$1"
         DEVICE_PATH="/sys/bus/pci/devices/$DEVICE"
 
         if [ ! -e "$DEVICE_PATH" ]; then
           echo "Required win11 PCI device is missing: $DEVICE" >&2
           exit 1
-        fi
-
-        CURRENT_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$DEVICE_PATH/driver" 2>/dev/null || true)"
-        if [ "$CURRENT_DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
-          echo vfio-pci > "$DEVICE_PATH/driver_override"
-          if [ -n "$CURRENT_DRIVER" ]; then
-            echo "$DEVICE" > "$DEVICE_PATH/driver/unbind"
-          fi
-          echo "$DEVICE" > /sys/bus/pci/drivers_probe
         fi
 
         CURRENT_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$DEVICE_PATH/driver" 2>/dev/null || true)"
@@ -503,17 +500,28 @@ EOF
 
       wait_for_startup_devices
 
-      for DEVICE in ${builtins.concatStringsSep " " win11UsbControllers}; do
-        bind_vfio_device "$DEVICE"
-      done
-      for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
-        bind_vfio_device "$DEVICE"
+      # Devices selected through vfio-pci.ids must already be attached to VFIO.
+      # The two exact USB controllers intentionally remain libvirt-managed
+      # because their PCI ID is shared with host-owned USB controllers.
+      for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
+        verify_vfio_binding "$DEVICE"
       done
 
       ${pkgs.libvirt}/bin/virsh start win11
 
-      # Keep power sync suppressed while immediate startup failures are most
-      # likely. A normal Windows shutdown after this point powers off the host.
+      # This hardware reaches TianoCore on a cold QEMU start but does not
+      # continue into the passed-through NVMe boot path until the VM is reset.
+      # Reset once, early, while power sync is suppressed; never schedule a
+      # later ACPI reboot that could turn a user shutdown into a restart.
+      ${pkgs.coreutils}/bin/sleep 8
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "Applying one early cold-start reset for the win11 passthrough stack."
+        ${pkgs.libvirt}/bin/virsh reset win11
+      else
+        echo "win11 stopped before its cold-start reset; power sync left disabled." >&2
+        exit 1
+      fi
+
       ${pkgs.coreutils}/bin/sleep 15
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
         if power_sync_forced_off; then
