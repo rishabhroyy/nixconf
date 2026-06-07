@@ -29,14 +29,15 @@ Useful host-side checks:
 
 ```bash
 sudo systemctl status define-win11-vm.service
-sudo systemctl status reboot-win11-after-libvirt-autostart.service
+sudo systemctl status start-win11-vm.service
 sudo virsh list --all
 sudo verify-win11-vfio
 ```
 
-Libvirt owns VM autostart. After libvirt starts the guest, a one-shot service
-waits 20 seconds, sends one `virsh reboot win11`, then enables power sync only
-if the guest is still running after the warm-reboot grace period.
+The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
+independent autostart path, waits for the generated VM definition, verifies the
+passthrough stack, starts Windows once, and enables power sync after the guest
+survives its startup grace period.
 
 Useful maintenance helpers:
 
@@ -70,8 +71,8 @@ than a permanent boot order edit.
 
 ## Power Sync
 
-Power sync is suppressed during VM autostart and enabled automatically only
-after the warm-reboot service confirms the guest is still running.
+Power sync is suppressed during VM startup and enabled automatically after the
+guest remains running through its startup grace period.
 
 ```bash
 sudo enable-power-sync
@@ -82,6 +83,18 @@ When the marker is absent, stopping the Windows VM powers off the NixOS host.
 When the marker exists, VM shutdown leaves the host running. The physical power
 button path still asks the VM to shut down first, waits briefly, then powers off
 the host.
+
+To skip VM autostart for one boot, edit the boot entry and add either:
+
+```text
+win11.no_autostart=1
+```
+
+or:
+
+```text
+no-win11-autostart
+```
 
 To disable power sync for one boot, edit the boot entry and add either kernel
 parameter:

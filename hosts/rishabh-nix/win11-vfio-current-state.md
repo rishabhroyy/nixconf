@@ -15,9 +15,14 @@ Current stable profile for the `win11` libvirt domain.
 - 16 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
   and an 8-core / 16-thread topology.
 - Physical cores 4-7 isolated for the VM; physical cores 0-3 shared with NixOS.
+- Normal systemd workloads, interrupts, unbound workqueues, and managed
+  containers prefer the housekeeping CPUs on physical cores 0-3.
 - Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
 - KVM IOAPIC, nested virtualization, and AVIC.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
+- Deterministic systemd-owned VM startup after the current XML and passthrough
+  bindings are ready; libvirt's independent domain autostart is disabled.
+- Seamless Windows-shutdown-to-NixOS-poweroff sync after startup succeeds.
 
 ## Not Active
 
@@ -27,6 +32,7 @@ Current stable profile for the `win11` libvirt domain.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
 - No runtime IRQ or workqueue repinning from the libvirt hook.
+- No automatic warm reboot after the first Windows boot.
 
 ## Checks
 
