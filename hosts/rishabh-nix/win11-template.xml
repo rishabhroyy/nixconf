@@ -89,7 +89,9 @@ $HYPERVCLOCK_TIMER
   </clock>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
-  <on_crash>destroy</on_crash>
+  <!-- Preserve a crashed guest for diagnosis instead of converting it into a
+       stopped event that could be mistaken for a normal Windows shutdown. -->
+  <on_crash>preserve</on_crash>
   <pm>
     <suspend-to-mem enabled='no'/>
     <suspend-to-disk enabled='no'/>

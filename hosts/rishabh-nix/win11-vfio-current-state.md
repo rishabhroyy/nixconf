@@ -22,9 +22,12 @@ Current stable profile for the `win11` libvirt domain.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.
-- One cold-start reset after a 30-second device-initialization delay, while
-  TianoCore is active and before power sync is enabled.
-- Seamless Windows-shutdown-to-NixOS-poweroff sync after startup succeeds.
+- Startup waits for udev/network readiness and verifies that the physical TPM
+  responds before QEMU starts.
+- Safe paused startup: QEMU initializes VFIO devices for 30 seconds before
+  guest CPUs and Windows storage are allowed to run.
+- Host-only libvirt lifecycle monitoring powers off NixOS only after a normal
+  guest shutdown; no Windows-side tooling is required.
 
 ## Not Active
 
@@ -34,7 +37,7 @@ Current stable profile for the `win11` libvirt domain.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
 - No runtime IRQ or workqueue repinning from the libvirt hook.
-- No delayed ACPI reboot that can race with a user-requested Windows shutdown.
+- No automatic guest reset, reboot, destroy, or retry.
 
 ## Checks
 

@@ -140,16 +140,6 @@ in
           if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
               release_hugepages
           fi
-          
-          if [[ "$OPERATION" == "stopped" ]]; then
-              # Only power off if the lock file does NOT exist
-              if [ ! -f /var/lib/libvirt/hooks/no-power-sync ]; then
-                  echo "Windows 11 guest $OPERATION. Syncing power off to NixOS host." | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
-                  ${pkgs.systemd}/bin/systemctl poweroff
-              else
-                  echo "Windows 11 guest $OPERATION. Power sync suppressed by /var/lib/libvirt/hooks/no-power-sync" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook
-              fi
-          fi
       fi
     '';
   in ''
@@ -161,10 +151,42 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Startup owns temporary power-sync suppression. Do not change the marker
-    # during a live nixos-rebuild, because that would silently disable seamless
-    # Windows-to-host shutdown for an already-running guest.
+    # Power sync is handled by the lifecycle-event monitor below. Hooks do not
+    # call back into libvirt or decide whether a stopped VM should power off.
   '';
+
+  systemd.services.win11-power-sync-monitor = {
+    description = "Power off NixOS after a clean Windows 11 guest shutdown";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "libvirtd.service" ];
+    requires = [ "libvirtd.service" ];
+    serviceConfig = {
+      Type = "simple";
+      Restart = "always";
+      RestartSec = "2s";
+    };
+    script = ''
+      set -uo pipefail
+      export LC_ALL=C
+
+      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --all --event lifecycle --loop --timestamp |
+        while IFS= read -r EVENT; do
+          echo "$EVENT" | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+
+          case "$EVENT" in
+            *"domain 'win11': Stopped Shutdown"*)
+              if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
+                 ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
+                echo "Windows 11 completed a clean guest shutdown; host poweroff is disabled by the kernel command line." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+              else
+                echo "Windows 11 completed a clean guest shutdown; powering off NixOS." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                ${pkgs.systemd}/bin/systemctl poweroff
+              fi
+              ;;
+          esac
+        done
+    '';
+  };
 
   # Systemd service to define the VM from the template XML automatically
   systemd.services.define-win11-vm = {
@@ -428,18 +450,26 @@ EOF
   systemd.services.start-win11-vm = {
     description = "Start Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" "define-win11-vm.service" ];
-    requires = [ "libvirtd.service" "define-win11-vm.service" ];
+    after = [
+      "libvirtd.service"
+      "define-win11-vm.service"
+      "systemd-udev-settle.service"
+      "network-online.target"
+      "win11-power-sync-monitor.service"
+    ];
+    wants = [ "systemd-udev-settle.service" "network-online.target" ];
+    requires = [
+      "libvirtd.service"
+      "define-win11-vm.service"
+      "win11-power-sync-monitor.service"
+    ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      TimeoutStartSec = "3min";
     };
     script = ''
-      power_sync_forced_off() {
-        ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
-        ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline
-      }
-      COLD_START_RESET_DELAY_SECONDS=30
+      PAUSED_DEVICE_SETTLE_SECONDS=30
 
       verify_vfio_binding() {
         DEVICE="$1"
@@ -466,6 +496,8 @@ EOF
           fi
           if [ ! -e /dev/tpmrm0 ]; then
             MISSING="$MISSING /dev/tpmrm0"
+          elif ! ${pkgs.tpm2-tools}/bin/tpm2_getcap properties-fixed >/dev/null 2>&1; then
+            MISSING="$MISSING tpm-not-ready"
           fi
           for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
             if [ ! -e "/sys/bus/pci/devices/$DEVICE" ]; then
@@ -491,13 +523,11 @@ EOF
         exit 0
       fi
 
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is already running."
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
+      if [ "$CURRENT_STATE" = "running" ] || [ "$CURRENT_STATE" = "paused" ]; then
+        echo "win11 is already active ($CURRENT_STATE); leaving it unchanged."
         exit 0
       fi
-
-      # Failed startup cleanup must never power off the host.
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
 
       wait_for_startup_devices
 
@@ -508,33 +538,26 @@ EOF
         verify_vfio_binding "$DEVICE"
       done
 
-      ${pkgs.libvirt}/bin/virsh start win11
+      # QEMU opens and initializes every VFIO device before guest CPUs execute.
+      # Keeping the domain paused gives slow passthrough hardware time to settle
+      # without running OVMF or allowing Windows to touch its filesystems.
+      ${pkgs.libvirt}/bin/virsh start win11 --paused
+      echo "Waiting $PAUSED_DEVICE_SETTLE_SECONDS seconds with win11 safely paused for passthrough initialization."
+      ${pkgs.coreutils}/bin/sleep "$PAUSED_DEVICE_SETTLE_SECONDS"
 
-      # This hardware reaches TianoCore on a cold QEMU start but does not
-      # continue into the passed-through NVMe boot path until the VM is reset.
-      # Give the full passthrough stack time to initialize, then reset once
-      # while power sync is suppressed. Never schedule a later ACPI reboot that
-      # could turn a user shutdown into a restart.
-      echo "Waiting $COLD_START_RESET_DELAY_SECONDS seconds before the win11 cold-start reset."
-      ${pkgs.coreutils}/bin/sleep "$COLD_START_RESET_DELAY_SECONDS"
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "Applying one early cold-start reset for the win11 passthrough stack."
-        ${pkgs.libvirt}/bin/virsh reset win11
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q paused; then
+        ${pkgs.libvirt}/bin/virsh resume win11
+        echo "win11 resumed after paused passthrough initialization."
       else
-        echo "win11 stopped before its cold-start reset; power sync left disabled." >&2
+        echo "win11 did not remain paused during passthrough initialization; power sync left disabled." >&2
         exit 1
       fi
 
       ${pkgs.coreutils}/bin/sleep 15
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        if power_sync_forced_off; then
-          echo "win11 started; power sync kept disabled by kernel command line."
-        else
-          ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/hooks/no-power-sync
-          echo "win11 started; seamless Windows-to-host power sync enabled."
-        fi
+        echo "win11 is running; clean guest shutdowns are monitored for seamless host poweroff."
       else
-        echo "win11 did not remain running after startup; power sync left disabled." >&2
+        echo "win11 did not remain running after startup." >&2
         exit 1
       fi
     '';
@@ -775,15 +798,13 @@ EOF
 
       echo
       echo "== Lifecycle =="
-      ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service || true
+      ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service win11-power-sync-monitor.service || true
+      ${pkgs.coreutils}/bin/printf 'domain-state='
+      ${pkgs.libvirt}/bin/virsh domstate win11 --reason 2>/dev/null || true
       ${pkgs.coreutils}/bin/printf 'libvirt-autostart='
       ${pkgs.libvirt}/bin/virsh dominfo win11 2>/dev/null | ${pkgs.gnused}/bin/sed -n 's/^Autostart:[[:space:]]*//p' || true
-      ${pkgs.coreutils}/bin/printf 'power-sync='
-      if [ -f /var/lib/libvirt/hooks/no-power-sync ]; then
-        echo disabled
-      else
-        echo enabled
-      fi
+      echo "recent QEMU log:"
+      ${pkgs.coreutils}/bin/tail -n 40 /var/log/libvirt/qemu/win11.log 2>/dev/null || true
 
       echo
       echo "== Hugepages =="
@@ -791,4 +812,5 @@ EOF
       ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
     '')
   ];
+
 }
