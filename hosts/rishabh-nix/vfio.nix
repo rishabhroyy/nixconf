@@ -169,12 +169,12 @@ in
       set -uo pipefail
       export LC_ALL=C
 
-      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --all --event lifecycle --loop --timestamp |
+      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --event lifecycle --loop --timestamp |
         while IFS= read -r EVENT; do
           echo "$EVENT" | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
 
           case "$EVENT" in
-            *"domain 'win11': Stopped Shutdown"*)
+            *"event 'lifecycle' for domain win11: Stopped Shutdown"*|*"event 'lifecycle' for domain 'win11': Stopped Shutdown"*)
               if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
                  ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
                 echo "Windows 11 completed a clean guest shutdown; host poweroff is disabled by the kernel command line." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
