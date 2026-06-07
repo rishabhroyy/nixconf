@@ -42,6 +42,11 @@ Windows paused, waits 30 seconds for VFIO devices to settle without running
 guest code, then resumes Windows once. It never resets, reboots, destroys, or
 retries the guest automatically.
 
+The VM keeps an 8-core / 16-thread topology. Four physical cores remain shared
+with NixOS, while four are isolated for latency-sensitive guest work. Only the
+vCPU threads pinned to isolated cores use low-priority real-time round-robin
+scheduling; QEMU housekeeping and host workloads keep normal scheduling.
+
 The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
 and reboot events. It powers off NixOS only after libvirt reports the specific
 normal shutdown reason `Stopped Shutdown` and the domain remains off after a

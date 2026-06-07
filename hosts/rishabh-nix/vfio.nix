@@ -68,6 +68,10 @@ in
     };
   };
 
+  # Permit only the low real-time priority requested by the isolated guest
+  # vCPUs. Host work and shared guest vCPUs retain normal scheduling.
+  systemd.services.libvirtd.serviceConfig.LimitRTPRIO = 1;
+
   services.udev.extraRules = ''
     # Let the win11 QEMU process open the physical TPM 2.0 resource manager.
     KERNEL=="tpmrm0", GROUP="qemu", MODE="0660"
@@ -866,12 +870,14 @@ EOF
       echo "== CPU affinity =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|vcpusched|emulatorsched' || true
+      ${pkgs.coreutils}/bin/printf 'libvirtd-rtprio-limit='
+      ${pkgs.systemd}/bin/systemctl show libvirtd.service --property=LimitRTPRIO --value || true
       ${pkgs.coreutils}/bin/printf 'kernel-command-line='
       ${pkgs.coreutils}/bin/cat /proc/cmdline
       ${pkgs.coreutils}/bin/printf 'unbound-workqueue-cpumask='
       ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
       echo "threads currently executing on latency-sensitive CPUs:"
-      ${pkgs.procps}/bin/ps -eLo pid,tid,psr,comm --no-headers | ${pkgs.gawk}/bin/awk '
+      ${pkgs.procps}/bin/ps -eLo pid,tid,psr,cls,rtprio,comm --no-headers | ${pkgs.gawk}/bin/awk '
         $3 == 4 || $3 == 5 || $3 == 6 || $3 == 7 ||
         $3 == 12 || $3 == 13 || $3 == 14 || $3 == 15 { print }
       ' || true
