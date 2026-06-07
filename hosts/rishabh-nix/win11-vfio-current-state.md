@@ -22,6 +22,8 @@ Current stable profile for the `win11` libvirt domain.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.
+- One early cold-start reset while TianoCore is active, before power sync is
+  enabled, to initialize the passed-through boot stack.
 - Seamless Windows-shutdown-to-NixOS-poweroff sync after startup succeeds.
 
 ## Not Active
@@ -32,7 +34,7 @@ Current stable profile for the `win11` libvirt domain.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
 - No runtime IRQ or workqueue repinning from the libvirt hook.
-- No automatic warm reboot after the first Windows boot.
+- No delayed ACPI reboot that can race with a user-requested Windows shutdown.
 
 ## Checks
 

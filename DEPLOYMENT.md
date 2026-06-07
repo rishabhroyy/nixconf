@@ -36,8 +36,9 @@ sudo verify-win11-vfio
 
 The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
 independent autostart path, waits for the generated VM definition, verifies the
-passthrough stack, starts Windows once, and enables power sync after the guest
-survives its startup grace period.
+passthrough stack, starts Windows, applies the host-specific early TianoCore
+reset required by the passed-through boot stack, and enables power sync after
+the guest survives its startup grace period.
 
 Useful maintenance helpers:
 
