@@ -4,6 +4,16 @@ let
   # The devices we want to pass through to the Windows 11 VM.
   # Keep this on the known-working global binding path.
   vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
+  win11VfioDevices = [
+    "0000:2f:00.0"
+    "0000:2f:00.1"
+    "0000:22:00.0"
+    "0000:26:00.0"
+    "0000:2a:00.1"
+    "0000:2a:00.3"
+    "0000:29:00.0"
+  ];
+  win11UsbControllers = [ "0000:2a:00.1" "0000:2a:00.3" ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -12,9 +22,12 @@ in
     "iommu=pt"
     # Isolate physical cores 4-7 for the Windows 11 VM.
     # Physical cores 0-3 remain shared so NixOS has room to breathe.
-    "isolcpus=4-7,12-15"
+    "isolcpus=domain,managed_irq,4-7,12-15"
     "nohz_full=4-7,12-15"
     "rcu_nocbs=4-7,12-15"
+    "irqaffinity=0-3,8-11"
+    "workqueue.unbound_cpus=0-3,8-11"
+    "systemd.cpu_affinity=0-3,8-11"
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
@@ -53,6 +66,18 @@ in
     # Let the win11 QEMU process open the physical TPM 2.0 resource manager.
     KERNEL=="tpmrm0", GROUP="qemu", MODE="0660"
   '';
+
+  # Libvirt domain autostart races the generated XML and passthrough-device
+  # readiness. The dedicated start-win11-vm service owns guest startup.
+  systemd.services.disable-win11-libvirt-autostart = {
+    description = "Disable libvirt-owned Windows 11 autostart";
+    before = [ "libvirtd.service" ];
+    requiredBy = [ "libvirtd.service" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/autostart/win11.xml
+    '';
+  };
 
   # Hook for VM-to-Host Power Sync
   system.activationScripts.libvirt-hooks.text = let
@@ -130,9 +155,9 @@ in
     
     chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
 
-    # Keep power sync suppressed until the post-autostart reboot service has
-    # verified that the guest survived its boot sequence.
-    touch /var/lib/libvirt/hooks/no-power-sync
+    # Startup owns temporary power-sync suppression. Do not change the marker
+    # during a live nixos-rebuild, because that would silently disable seamless
+    # Windows-to-host shutdown for an already-running guest.
   '';
 
   # Systemd service to define the VM from the template XML automatically
@@ -389,13 +414,13 @@ EOF
       ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" /tmp/win11-resolved.xml
 
       ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
-      ${pkgs.libvirt}/bin/virsh autostart win11 >/dev/null 2>&1 || true
+      ${pkgs.libvirt}/bin/virsh autostart --disable win11 >/dev/null 2>&1 || true
       rm /tmp/win11-resolved.xml
     '';
   };
 
-  systemd.services.reboot-win11-after-libvirt-autostart = {
-    description = "Reboot Windows 11 after libvirt autostart settles";
+  systemd.services.start-win11-vm = {
+    description = "Start Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
     after = [ "libvirtd.service" "define-win11-vm.service" ];
     requires = [ "libvirtd.service" "define-win11-vm.service" ];
@@ -409,28 +434,97 @@ EOF
         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline
       }
 
-      # Failed autostart/reboot cleanup must never power off the host.
-      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
+      bind_vfio_device() {
+        DEVICE="$1"
+        DEVICE_PATH="/sys/bus/pci/devices/$DEVICE"
 
-      ${pkgs.coreutils}/bin/sleep 20
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running after libvirt autostart; sending one guest reboot."
-        ${pkgs.libvirt}/bin/virsh reboot win11
-      else
-        echo "win11 is not running after libvirt autostart; power sync left disabled."
+        if [ ! -e "$DEVICE_PATH" ]; then
+          echo "Required win11 PCI device is missing: $DEVICE" >&2
+          exit 1
+        fi
+
+        CURRENT_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$DEVICE_PATH/driver" 2>/dev/null || true)"
+        if [ "$CURRENT_DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
+          echo vfio-pci > "$DEVICE_PATH/driver_override"
+          if [ -n "$CURRENT_DRIVER" ]; then
+            echo "$DEVICE" > "$DEVICE_PATH/driver/unbind"
+          fi
+          echo "$DEVICE" > /sys/bus/pci/drivers_probe
+        fi
+
+        CURRENT_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$DEVICE_PATH/driver" 2>/dev/null || true)"
+        if [ "$CURRENT_DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
+          echo "Required win11 PCI device is not bound to vfio-pci: $DEVICE ($CURRENT_DRIVER)" >&2
+          exit 1
+        fi
+      }
+
+      wait_for_startup_devices() {
+        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 45); do
+          MISSING=""
+
+          if [ ! -e /dev/vfio/vfio ]; then
+            MISSING="$MISSING /dev/vfio/vfio"
+          fi
+          if [ ! -e /dev/tpmrm0 ]; then
+            MISSING="$MISSING /dev/tpmrm0"
+          fi
+          for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
+            if [ ! -e "/sys/bus/pci/devices/$DEVICE" ]; then
+              MISSING="$MISSING $DEVICE"
+            fi
+          done
+
+          if [ -z "$MISSING" ]; then
+            return
+          fi
+
+          echo "Waiting for win11 startup devices:$MISSING"
+          ${pkgs.coreutils}/bin/sleep 1
+        done
+
+        echo "Timed out waiting for win11 startup devices:$MISSING" >&2
+        exit 1
+      }
+
+      if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_autostart=1' /proc/cmdline || \
+         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-autostart' /proc/cmdline; then
+        echo "win11 autostart disabled by kernel command line."
         exit 0
       fi
 
-      ${pkgs.coreutils}/bin/sleep 120
+      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
+        echo "win11 is already running."
+        exit 0
+      fi
+
+      # Failed startup cleanup must never power off the host.
+      ${pkgs.coreutils}/bin/touch /var/lib/libvirt/hooks/no-power-sync
+
+      wait_for_startup_devices
+
+      for DEVICE in ${builtins.concatStringsSep " " win11UsbControllers}; do
+        bind_vfio_device "$DEVICE"
+      done
+      for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
+        bind_vfio_device "$DEVICE"
+      done
+
+      ${pkgs.libvirt}/bin/virsh start win11
+
+      # Keep power sync suppressed while immediate startup failures are most
+      # likely. A normal Windows shutdown after this point powers off the host.
+      ${pkgs.coreutils}/bin/sleep 15
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
         if power_sync_forced_off; then
-          echo "win11 survived warm reboot; power sync kept disabled by kernel command line."
+          echo "win11 started; power sync kept disabled by kernel command line."
         else
           ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/hooks/no-power-sync
-          echo "win11 survived warm reboot; power sync enabled."
+          echo "win11 started; seamless Windows-to-host power sync enabled."
         fi
       else
-        echo "win11 did not remain running after warm reboot; power sync left disabled."
+        echo "win11 did not remain running after startup; power sync left disabled." >&2
+        exit 1
       fi
     '';
   };
@@ -647,7 +741,38 @@ EOF
       echo "== CPU affinity =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|vcpusched|emulatorsched' || true
-      echo "runtime-irq-workqueue-repinning=removed"
+      ${pkgs.coreutils}/bin/printf 'kernel-command-line='
+      ${pkgs.coreutils}/bin/cat /proc/cmdline
+      ${pkgs.coreutils}/bin/printf 'unbound-workqueue-cpumask='
+      ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
+      echo "threads currently executing on latency-sensitive CPUs:"
+      ${pkgs.procps}/bin/ps -eLo pid,tid,psr,comm --no-headers | ${pkgs.gawk}/bin/awk '
+        $3 == 4 || $3 == 5 || $3 == 6 || $3 == 7 ||
+        $3 == 12 || $3 == 13 || $3 == 14 || $3 == 15 { print }
+      ' || true
+
+      echo
+      echo "== Passthrough bindings =="
+      for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
+        DRIVER="$(${pkgs.coreutils}/bin/readlink -f "/sys/bus/pci/devices/$DEVICE/driver" 2>/dev/null || true)"
+        if [ -n "$DRIVER" ]; then
+          echo "$DEVICE -> $DRIVER"
+        else
+          echo "$DEVICE -> missing or unbound"
+        fi
+      done
+
+      echo
+      echo "== Lifecycle =="
+      ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service || true
+      ${pkgs.coreutils}/bin/printf 'libvirt-autostart='
+      ${pkgs.libvirt}/bin/virsh dominfo win11 2>/dev/null | ${pkgs.gnused}/bin/sed -n 's/^Autostart:[[:space:]]*//p' || true
+      ${pkgs.coreutils}/bin/printf 'power-sync='
+      if [ -f /var/lib/libvirt/hooks/no-power-sync ]; then
+        echo disabled
+      else
+        echo enabled
+      fi
 
       echo
       echo "== Hugepages =="
