@@ -439,6 +439,7 @@ EOF
         ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline
       }
+      COLD_START_RESET_DELAY_SECONDS=30
 
       verify_vfio_binding() {
         DEVICE="$1"
@@ -511,9 +512,11 @@ EOF
 
       # This hardware reaches TianoCore on a cold QEMU start but does not
       # continue into the passed-through NVMe boot path until the VM is reset.
-      # Reset once, early, while power sync is suppressed; never schedule a
-      # later ACPI reboot that could turn a user shutdown into a restart.
-      ${pkgs.coreutils}/bin/sleep 8
+      # Give the full passthrough stack time to initialize, then reset once
+      # while power sync is suppressed. Never schedule a later ACPI reboot that
+      # could turn a user shutdown into a restart.
+      echo "Waiting $COLD_START_RESET_DELAY_SECONDS seconds before the win11 cold-start reset."
+      ${pkgs.coreutils}/bin/sleep "$COLD_START_RESET_DELAY_SECONDS"
       if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
         echo "Applying one early cold-start reset for the win11 passthrough stack."
         ${pkgs.libvirt}/bin/virsh reset win11
