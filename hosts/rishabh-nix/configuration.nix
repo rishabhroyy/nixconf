@@ -203,6 +203,11 @@ in
     requires = [ "mnt-data4.mount" ];
   };
 
+  systemd.services.docker-immich-server = lib.mkIf (!recoveryMode) {
+    after = [ "mnt-data4.mount" ];
+    requires = [ "mnt-data4.mount" ];
+  };
+
   # ---------------------------------------------------------
   # System Auto-Update & Maintenance
   # ---------------------------------------------------------
