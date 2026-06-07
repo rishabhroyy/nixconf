@@ -15,6 +15,9 @@ Current stable profile for the `win11` libvirt domain.
 - 16 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
   and an 8-core / 16-thread topology.
 - Physical cores 4-7 isolated for the VM; physical cores 0-3 shared with NixOS.
+- The eight vCPU threads on isolated cores use low-priority real-time
+  round-robin scheduling; shared guest cores and host work retain normal
+  scheduling.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
   containers prefer the housekeeping CPUs on physical cores 0-3.
 - Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
