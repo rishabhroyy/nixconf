@@ -6,8 +6,8 @@
   virtualisation.oci-containers.backend = "docker";
 
   # Tailscale Sidecars and Services
-  # Keep background services on the housekeeping CPUs while the latency-sensitive
-  # half of the CPU remains available to the Windows guest.
+  # Keep background services on the housekeeping CPUs while the
+  # latency-sensitive CPU cores remain available to the Windows guest.
   virtualisation.oci-containers.containers = builtins.mapAttrs (_: container:
     container // {
       extraOptions = (container.extraOptions or []) ++ [ "--cpuset-cpus=0-3,8-11" ];

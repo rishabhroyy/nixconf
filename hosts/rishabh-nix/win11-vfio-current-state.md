@@ -26,8 +26,9 @@ Current stable profile for the `win11` libvirt domain.
   responds before QEMU starts.
 - Safe paused startup: QEMU initializes VFIO devices for 30 seconds before
   guest CPUs and Windows storage are allowed to run.
-- Host-only libvirt lifecycle monitoring powers off NixOS only after a normal
-  guest shutdown; no Windows-side tooling is required.
+- Host-only libvirt lifecycle and reboot monitoring powers off NixOS only after
+  a normal guest shutdown that leaves the domain off; no Windows-side tooling
+  is required.
 
 ## Not Active
 
@@ -37,7 +38,8 @@ Current stable profile for the `win11` libvirt domain.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
 - No runtime IRQ or workqueue repinning from the libvirt hook.
-- No automatic guest reset, reboot, destroy, or retry.
+- No host-initiated automatic guest reset, reboot, destroy, or retry after a
+  startup failure. Guest-requested Windows restarts retain normal semantics.
 
 ## Checks
 

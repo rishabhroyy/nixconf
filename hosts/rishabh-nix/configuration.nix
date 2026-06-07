@@ -253,6 +253,30 @@ in
     (pkgs.writeShellScriptBin "reboot-to-windows" ''
       set -eu
 
+      POWER_SYNC_MARKER=/run/win11-power-sync.disabled
+      ${pkgs.coreutils}/bin/touch "$POWER_SYNC_MARKER"
+      trap '${pkgs.coreutils}/bin/rm -f "$POWER_SYNC_MARKER"' EXIT
+
+      ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
+      if printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
+        echo "Requesting a clean Windows VM shutdown before bare-metal boot."
+        ${pkgs.libvirt}/bin/virsh shutdown win11
+
+        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 120); do
+          ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
+          if ! printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
+            break
+          fi
+          ${pkgs.coreutils}/bin/sleep 1
+        done
+
+        ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
+        if printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
+          echo "Windows VM did not shut down cleanly; refusing to reboot into the same physical disk." >&2
+          exit 1
+        fi
+      fi
+
       BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
         BEGIN { IGNORECASE = 1 }
         /^Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]/ && /Windows Boot Manager/ {
@@ -322,8 +346,8 @@ in
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
-    disable-power-sync = "sudo systemctl stop win11-power-sync-monitor.service && echo 'Power sync disabled.'";
-    enable-power-sync = "sudo systemctl start win11-power-sync-monitor.service && echo 'Power sync enabled.'";
+    disable-power-sync = "sudo /run/current-system/sw/bin/disable-power-sync";
+    enable-power-sync = "sudo /run/current-system/sw/bin/enable-power-sync";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
     reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
