@@ -43,9 +43,11 @@ guest code, then resumes Windows once. It never resets, reboots, destroys, or
 retries the guest automatically.
 
 The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
-events. It powers off NixOS only after libvirt reports the specific normal
-shutdown reason `Stopped Shutdown`. Crashes, forced stops, failed boots, and
-stuck firmware leave NixOS running.
+and reboot events. It powers off NixOS only after libvirt reports the specific
+normal shutdown reason `Stopped Shutdown` and the domain remains off after a
+short guard period. Reboots, crashes, forced stops, failed boots, and stuck
+firmware leave NixOS running. Existing NixOS shutdown or reboot transactions
+are never replaced by a VM-triggered poweroff.
 
 Useful maintenance helpers:
 
@@ -80,7 +82,9 @@ From Windows, run PowerShell as Administrator from this repo checkout:
 ```
 
 Both commands use UEFI BootNext/bootsequence, so the change is one-time rather
-than a permanent boot order edit.
+than a permanent boot order edit. `reboot-to-windows` first waits for the VFIO
+guest to shut down cleanly and refuses to reboot if the physical Windows disk
+is still active in QEMU.
 
 ## Power Sync
 
@@ -91,6 +95,11 @@ other VM stop reasons leave NixOS running.
 sudo enable-power-sync
 sudo disable-power-sync
 ```
+
+`disable-power-sync` leaves the lifecycle monitor running but prevents it from
+powering off NixOS. It remains effective across service restarts and
+configuration switches until `enable-power-sync` is run or the NixOS host
+boots again.
 
 The physical power button path still asks the VM to shut down first, waits
 briefly, then powers off the host.

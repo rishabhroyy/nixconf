@@ -27,7 +27,7 @@ in
     "amd_iommu=on"
     "iommu=pt"
     # Isolate physical cores 4-7 for the Windows 11 VM.
-    # Physical cores 0-3 remain shared so NixOS has room to breathe.
+    # Physical cores 0-3 remain shared for NixOS and QEMU housekeeping.
     "isolcpus=domain,managed_irq,4-7,12-15"
     "nohz_full=4-7,12-15"
     "rcu_nocbs=4-7,12-15"
@@ -168,20 +168,62 @@ in
     script = ''
       set -uo pipefail
       export LC_ALL=C
+      REBOOT_MARKER=/run/win11-reboot-requested
 
-      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --event lifecycle --loop --timestamp |
+      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --all --loop --timestamp |
         while IFS= read -r EVENT; do
           echo "$EVENT" | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
 
           case "$EVENT" in
+            *"event 'reboot' for domain win11:"*|*"event 'reboot' for domain 'win11':"*)
+              ${pkgs.coreutils}/bin/touch "$REBOOT_MARKER"
+              echo "Windows 11 requested a reboot; suppressing host poweroff for this transition." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+              ;;
+            *"event 'lifecycle' for domain win11: Started Booted"*|*"event 'lifecycle' for domain 'win11': Started Booted"*)
+              ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
+              ;;
             *"event 'lifecycle' for domain win11: Stopped Shutdown"*|*"event 'lifecycle' for domain 'win11': Stopped Shutdown"*)
-              if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
-                 ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
-                echo "Windows 11 completed a clean guest shutdown; host poweroff is disabled by the kernel command line." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-              else
-                echo "Windows 11 completed a clean guest shutdown; powering off NixOS." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                ${pkgs.systemd}/bin/systemctl poweroff
-              fi
+              (
+                # Reboots temporarily pass through Stopped Shutdown. Give
+                # libvirt time to emit the reboot/start events before deciding.
+                ${pkgs.coreutils}/bin/sleep 5
+
+                if [ -e /run/win11-power-sync.disabled ] || \
+                   ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
+                   ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
+                  echo "Windows 11 completed a clean guest shutdown; host poweroff is disabled." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                  exit 0
+                fi
+
+                if [ -e "$REBOOT_MARKER" ]; then
+                  NOW="$(${pkgs.coreutils}/bin/date +%s)"
+                  MARKER_TIME="$(${pkgs.coreutils}/bin/stat -c %Y "$REBOOT_MARKER" 2>/dev/null || echo 0)"
+                  MARKER_AGE="$((NOW - MARKER_TIME))"
+                  if [ "$MARKER_AGE" -ge 0 ] && [ "$MARKER_AGE" -le 120 ]; then
+                    echo "Windows 11 stopped as part of a reboot; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                    exit 0
+                  fi
+                  ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
+                fi
+
+                SYSTEM_STATE="$(${pkgs.systemd}/bin/systemctl is-system-running 2>/dev/null || true)"
+                case "$SYSTEM_STATE" in
+                  running|degraded)
+                    ;;
+                  *)
+                    echo "Windows 11 stopped while NixOS state is '$SYSTEM_STATE'; leaving the existing host shutdown/reboot transaction unchanged." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                    exit 0
+                    ;;
+                esac
+
+                CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
+                if [ "$CURRENT_STATE" = "shut off" ]; then
+                  echo "Windows 11 completed a clean shutdown and remains off; powering off NixOS." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                  ${pkgs.systemd}/bin/systemctl poweroff
+                else
+                  echo "Windows 11 stopped with shutdown reason but current state is '$CURRENT_STATE'; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                fi
+              ) &
               ;;
           esac
         done
@@ -197,13 +239,25 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      TimeoutStartSec = "3min";
     };
     script = ''
-      # Wait for secrets to be decrypted by sops-nix
-      while [ ! -f /run/secrets/motherboard_uuid ]; do
-        echo "Waiting for motherboard_uuid secret..."
-        sleep 1
+      export LC_ALL=C
+
+      # Both values are required to produce a stable VM identity. Fail cleanly
+      # instead of defining a partial domain if secret decryption is unavailable.
+      for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 60); do
+        MISSING_SECRETS=""
+        [ -f /run/secrets/motherboard_uuid ] || MISSING_SECRETS="$MISSING_SECRETS motherboard_uuid"
+        [ -f /run/secrets/motherboard_serial ] || MISSING_SECRETS="$MISSING_SECRETS motherboard_serial"
+        [ -z "$MISSING_SECRETS" ] && break
+        echo "Waiting for required secrets:$MISSING_SECRETS"
+        ${pkgs.coreutils}/bin/sleep 1
       done
+      if [ -n "$MISSING_SECRETS" ]; then
+        echo "Timed out waiting for required secrets:$MISSING_SECRETS" >&2
+        exit 1
+      fi
       # Copy the ROM from the local Nix repository to the libvirt directory so QEMU can read it
       # Placed in the qemu subfolder and chowned so AppArmor and the qemu user don't block it
       mkdir -p /var/lib/libvirt/qemu
@@ -219,6 +273,12 @@ in
 
         if [ -f "$MARKER" ] && [ -f "$NVRAM" ]; then
           return
+        fi
+
+        CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
+        if [ -n "$CURRENT_STATE" ] && [ "$CURRENT_STATE" != "shut off" ]; then
+          echo "win11 is active ($CURRENT_STATE); refusing to modify its OVMF variables." >&2
+          exit 1
         fi
 
         if [ ! -f "$INPUT" ]; then
@@ -428,9 +488,9 @@ EOF
   </qemu:commandline>"
       export QEMU_COMMANDLINE
       
-      # Substitute the $UUID and $SERIAL variables into the template and define it
+      # Resolve the generated identity, firmware, and feature fragments.
       ${pkgs.envsubst}/bin/envsubst \
-        '$UUID $SERIAL $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
+        '$UUID $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $OVMF_CODE $OVMF_VARS $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
         < ${./win11-template.xml} > /tmp/win11-resolved.xml
 
       if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' /tmp/win11-resolved.xml; then
@@ -457,11 +517,14 @@ EOF
       "network-online.target"
       "win11-power-sync-monitor.service"
     ];
-    wants = [ "systemd-udev-settle.service" "network-online.target" ];
+    wants = [
+      "systemd-udev-settle.service"
+      "network-online.target"
+      "win11-power-sync-monitor.service"
+    ];
     requires = [
       "libvirtd.service"
       "define-win11-vm.service"
-      "win11-power-sync-monitor.service"
     ];
     serviceConfig = {
       Type = "oneshot";
@@ -469,6 +532,7 @@ EOF
       TimeoutStartSec = "3min";
     };
     script = ''
+      export LC_ALL=C
       PAUSED_DEVICE_SETTLE_SECONDS=30
 
       verify_vfio_binding() {
@@ -524,10 +588,18 @@ EOF
       fi
 
       CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-      if [ "$CURRENT_STATE" = "running" ] || [ "$CURRENT_STATE" = "paused" ]; then
-        echo "win11 is already active ($CURRENT_STATE); leaving it unchanged."
-        exit 0
-      fi
+      case "$CURRENT_STATE" in
+        "shut off")
+          ;;
+        running|paused|blocked|crashed|pmsuspended|"in shutdown"|"no state")
+          echo "win11 is already active ($CURRENT_STATE); leaving it unchanged."
+          exit 0
+          ;;
+        *)
+          echo "Could not determine a safe inactive state for win11: $CURRENT_STATE" >&2
+          exit 1
+          ;;
+      esac
 
       wait_for_startup_devices
 
@@ -549,7 +621,7 @@ EOF
         ${pkgs.libvirt}/bin/virsh resume win11
         echo "win11 resumed after paused passthrough initialization."
       else
-        echo "win11 did not remain paused during passthrough initialization; power sync left disabled." >&2
+        echo "win11 did not remain paused during passthrough initialization; leaving it unchanged." >&2
         exit 1
       fi
 
@@ -574,11 +646,24 @@ EOF
     tpm2-tools
     python3Packages.virt-firmware
     acpica-tools
+    (pkgs.writeShellScriptBin "disable-power-sync" ''
+      set -eu
+      ${pkgs.coreutils}/bin/touch /run/win11-power-sync.disabled
+      echo "Power sync disabled until the next host boot or enable-power-sync."
+    '')
+    (pkgs.writeShellScriptBin "enable-power-sync" ''
+      set -eu
+      ${pkgs.coreutils}/bin/rm -f /run/win11-power-sync.disabled
+      ${pkgs.systemd}/bin/systemctl start win11-power-sync-monitor.service
+      echo "Power sync enabled."
+    '')
     (pkgs.writeShellScriptBin "reset-win11-vm-definition" ''
       set -eu
+      export LC_ALL=C
 
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before redefining the VM." >&2
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11)"
+      if [ "$CURRENT_STATE" != "shut off" ]; then
+        echo "win11 is not safely shut off ($CURRENT_STATE); refusing to redefine the VM." >&2
         exit 1
       fi
 
@@ -592,9 +677,11 @@ EOF
     '')
     (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
       set -eu
+      export LC_ALL=C
 
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before resetting its OVMF variables." >&2
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11)"
+      if [ "$CURRENT_STATE" != "shut off" ]; then
+        echo "win11 is not safely shut off ($CURRENT_STATE); refusing to reset its OVMF variables." >&2
         exit 1
       fi
 
@@ -613,9 +700,11 @@ EOF
     '')
     (pkgs.writeShellScriptBin "enroll-win11-secureboot-keys" ''
       set -eu
+      export LC_ALL=C
 
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; shut it down before enrolling OVMF Secure Boot keys." >&2
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11)"
+      if [ "$CURRENT_STATE" != "shut off" ]; then
+        echo "win11 is not safely shut off ($CURRENT_STATE); refusing to enroll OVMF Secure Boot keys." >&2
         exit 1
       fi
 
@@ -656,9 +745,11 @@ EOF
     '')
     (pkgs.writeShellScriptBin "free-win11-hugepages" ''
       set -eu
+      export LC_ALL=C
 
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is still running; shut it down before freeing its hugepages." >&2
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11)"
+      if [ "$CURRENT_STATE" != "shut off" ]; then
+        echo "win11 is not safely shut off ($CURRENT_STATE); refusing to free its hugepages." >&2
         exit 1
       fi
 
@@ -799,6 +890,11 @@ EOF
       echo
       echo "== Lifecycle =="
       ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service win11-power-sync-monitor.service || true
+      if [ -e /run/win11-power-sync.disabled ]; then
+        echo "power-sync=disabled-for-this-boot"
+      else
+        echo "power-sync=enabled"
+      fi
       ${pkgs.coreutils}/bin/printf 'domain-state='
       ${pkgs.libvirt}/bin/virsh domstate win11 --reason 2>/dev/null || true
       ${pkgs.coreutils}/bin/printf 'libvirt-autostart='
