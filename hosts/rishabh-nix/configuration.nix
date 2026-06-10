@@ -155,19 +155,23 @@ in
       power = {
         event = "button/power.*";
         action = ''
-          # 1. Send ACPI shutdown signal to the Windows 11 VM
-          ${pkgs.libvirt}/bin/virsh shutdown win11
-          
-          # 2. Wait up to 120 seconds for the VM process to exit gracefully
-          for i in {1..120}; do
-            if ! ${pkgs.libvirt}/bin/virsh list | ${pkgs.gnugrep}/bin/grep -q "win11"; then
-              break
-            fi
-            ${pkgs.coreutils}/bin/sleep 1
-          done
-          
-          # 3. Safely power off the NixOS host
-          ${pkgs.systemd}/bin/shutdown -h now
+          CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
+          case "$CURRENT_STATE" in
+            "shut off"|"")
+              ${pkgs.systemd}/bin/systemctl poweroff
+              ;;
+            running|blocked)
+              # The lifecycle monitor powers off NixOS only after libvirt
+              # confirms that Windows completed a clean shutdown.
+              ${pkgs.systemd}/bin/systemctl start win11-power-sync-monitor.service || true
+              ${pkgs.libvirt}/bin/virsh shutdown win11
+              ;;
+            "in shutdown")
+              ;;
+            *)
+              echo "Refusing to power off NixOS while win11 is in state '$CURRENT_STATE'." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-button -p warning
+              ;;
+          esac
         '';
       };
     };
