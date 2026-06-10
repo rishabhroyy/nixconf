@@ -20,6 +20,11 @@ let
     "0000:26:00.0"
     "0000:29:00.0"
   ];
+  win11LibvirtManagedDevices = [
+    "0000:2a:00.1"
+    "0000:2a:00.3"
+  ];
+  win11BootNvme = "0000:22:00.0";
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -77,6 +82,11 @@ in
   services.udev.extraRules = ''
     # Let the win11 QEMU process open the physical TPM 2.0 resource manager.
     KERNEL=="tpmrm0", GROUP="qemu", MODE="0660"
+
+    # The physical Windows boot drive is permanently owned by vfio-pci while
+    # NixOS is running. Keep it awake from PCI enumeration onward so its first
+    # guest I/O never races a D3cold or runtime-resume transition.
+    SUBSYSTEM=="pci", KERNEL=="${win11BootNvme}", ATTR{power/control}="on", ATTR{d3cold_allowed}="0"
   '';
 
   # Libvirt domain autostart races the generated XML and passthrough-device
@@ -91,74 +101,17 @@ in
     '';
   };
 
-  # Hook for VM-to-Host Power Sync
-  system.activationScripts.libvirt-hooks.text = let
-    hookScript = pkgs.writeShellScript "qemu-hook" ''
-      GUEST_NAME="$1"
-      OPERATION="$2"
-      SUB_OPERATION="$3"
-      HUGEPAGES_1G="16"
-      HUGEPAGES_1G_PATH="/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
-
-      allocate_hugepages() {
-          echo "$(date): allocating $HUGEPAGES_1G 1G hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
-          if [ ! -w "$HUGEPAGES_1G_PATH" ]; then
-              echo "1G hugepages are not available at $HUGEPAGES_1G_PATH" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
-              exit 1
-          fi
-
-          ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
-          ATTEMPT=1
-          while [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ] && [ "$ATTEMPT" -le 8 ]; do
-              echo 1 > /proc/sys/vm/compact_memory || true
-              echo 3 > /proc/sys/vm/drop_caches || true
-              echo 1 > /proc/sys/vm/compact_memory || true
-              echo "$HUGEPAGES_1G" > "$HUGEPAGES_1G_PATH"
-              ALLOCATED="$(cat "$HUGEPAGES_1G_PATH")"
-              if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
-                  sleep 1
-              fi
-              ATTEMPT=$((ATTEMPT + 1))
-          done
-
-          if [ "$ALLOCATED" -lt "$HUGEPAGES_1G" ]; then
-              echo "Failed to allocate $HUGEPAGES_1G 1G hugepages; only got $ALLOCATED" | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
-              ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo | ${pkgs.systemd}/bin/systemd-cat -t qemu-hook -p err
-              exit 1
-          fi
-      }
-
-      release_hugepages() {
-          echo "$(date): releasing hugepages for $GUEST_NAME" >> /tmp/qemu-hook.log
-          if [ -w "$HUGEPAGES_1G_PATH" ]; then
-              echo 0 > "$HUGEPAGES_1G_PATH" || true
-          fi
-      }
-
-      if [ "$GUEST_NAME" == "win11" ]; then
-          # Log the event for debugging
-          echo "$(date): win11 $OPERATION $SUB_OPERATION" >> /tmp/qemu-hook.log
-
-          if [[ "$OPERATION" == "prepare" && "$SUB_OPERATION" == "begin" ]]; then
-              allocate_hugepages
-          fi
-          
-          if [[ "$OPERATION" == "stopped" || "$OPERATION" == "release" ]]; then
-              release_hugepages
-          fi
+  # Hugepages are reserved by the kernel command line. Remove the old
+  # synchronous libvirt hook that redundantly compacted memory, dropped caches,
+  # and freed those pages during domain lifecycle transitions.
+  system.activationScripts.removeLegacyWin11LibvirtHooks.text = ''
+    for HOOK in /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu; do
+      if [ -f "$HOOK" ] \
+         && ${pkgs.gnugrep}/bin/grep -q 'qemu-hook.log' "$HOOK" \
+         && ${pkgs.gnugrep}/bin/grep -q 'hugepages-1048576kB' "$HOOK"; then
+        ${pkgs.coreutils}/bin/rm -f "$HOOK"
       fi
-    '';
-  in ''
-    mkdir -p /etc/libvirt/hooks /var/lib/libvirt/hooks
-    
-    # Place in both /etc and /var paths to ensure libvirt picks it up
-    cp -f ${hookScript} /etc/libvirt/hooks/qemu
-    cp -f ${hookScript} /var/lib/libvirt/hooks/qemu
-    
-    chmod +x /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu
-
-    # Power sync is handled by the lifecycle-event monitor below. Hooks do not
-    # call back into libvirt or decide whether a stopped VM should power off.
+    done
   '';
 
   systemd.services.win11-power-sync-monitor = {
@@ -301,47 +254,6 @@ in
       cp ${./6700xt.rom} /var/lib/libvirt/qemu/6700xt.rom
       chown root:root /var/lib/libvirt/qemu/6700xt.rom
       chmod 644 /var/lib/libvirt/qemu/6700xt.rom
-
-      enroll_secure_boot_keys_once() {
-        NVRAM=/var/lib/libvirt/qemu/nvram/win11_VARS.fd
-        TEMPLATE=${pkgs.ovmf_win11.variables}
-        MARKER=/var/lib/libvirt/qemu/nvram/win11_VARS.fd.secureboot-enrolled
-        INPUT="$NVRAM"
-
-        if [ -f "$MARKER" ] && [ -f "$NVRAM" ]; then
-          return
-        fi
-
-        CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-        if [ -n "$CURRENT_STATE" ] && [ "$CURRENT_STATE" != "shut off" ]; then
-          echo "win11 is active ($CURRENT_STATE); refusing to modify its OVMF variables." >&2
-          exit 1
-        fi
-
-        if [ ! -f "$INPUT" ]; then
-          if [ ! -f "$TEMPLATE" ]; then
-            echo "No existing win11 NVRAM and no template at $TEMPLATE" >&2
-            exit 1
-          fi
-          INPUT="$TEMPLATE"
-        fi
-
-        mkdir -p "$(${pkgs.coreutils}/bin/dirname "$NVRAM")"
-        TMP="$NVRAM.secboot.tmp"
-
-        ${pkgs.python3Packages.virt-firmware}/bin/virt-fw-vars \
-          --input "$INPUT" \
-          --output "$TMP" \
-          --enroll-redhat \
-          --secure-boot
-
-        ${pkgs.coreutils}/bin/install -m 0600 "$TMP" "$NVRAM"
-        ${pkgs.coreutils}/bin/rm -f "$TMP"
-        ${pkgs.coreutils}/bin/date -Is > "$MARKER"
-        echo "Enrolled Secure Boot keys into $NVRAM"
-      }
-
-      enroll_secure_boot_keys_once
 
       mkdir -p /var/lib/libvirt/qemu/acpi
       cat > /var/lib/libvirt/qemu/acpi/fake-thermal.asl <<'EOF'
@@ -547,18 +459,12 @@ EOF
   systemd.services.start-win11-vm = {
     description = "Start Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
+    before = [ "docker.service" ];
     after = [
       "libvirtd.service"
       "define-win11-vm.service"
-      "systemd-udev-settle.service"
-      "network-online.target"
-      "win11-power-sync-monitor.service"
     ];
-    wants = [
-      "systemd-udev-settle.service"
-      "network-online.target"
-      "win11-power-sync-monitor.service"
-    ];
+    wants = [ "win11-power-sync-monitor.service" ];
     requires = [
       "libvirtd.service"
       "define-win11-vm.service"
@@ -570,51 +476,117 @@ EOF
     };
     script = ''
       export LC_ALL=C
-      PAUSED_DEVICE_SETTLE_SECONDS=30
+      REQUIRED_HUGEPAGES_1G=16
+      REQUIRED_STABLE_SAMPLES=5
+      BOOT_NVME=${win11BootNvme}
 
-      verify_vfio_binding() {
-        DEVICE="$1"
-        DEVICE_PATH="/sys/bus/pci/devices/$DEVICE"
+      wait_for_stable_preflight() {
+        STABLE_SAMPLES=0
+        TPM_READY=0
 
-        if [ ! -e "$DEVICE_PATH" ]; then
-          echo "Required win11 PCI device is missing: $DEVICE" >&2
-          exit 1
-        fi
-
-        CURRENT_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$DEVICE_PATH/driver" 2>/dev/null || true)"
-        if [ "$CURRENT_DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
-          echo "Required win11 PCI device is not bound to vfio-pci: $DEVICE ($CURRENT_DRIVER)" >&2
-          exit 1
-        fi
-      }
-
-      wait_for_startup_devices() {
-        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 45); do
+        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 60); do
           MISSING=""
+          BOOT_NVME_PATH="/sys/bus/pci/devices/$BOOT_NVME"
+
+          # The boot NVMe is already owned by vfio-pci. Keep it fully powered
+          # before QEMU starts so OVMF and winload.efi never race a PCI runtime
+          # resume or a D3cold power-on transition.
+          if [ -w "$BOOT_NVME_PATH/power/control" ]; then
+            ${pkgs.coreutils}/bin/echo on > "$BOOT_NVME_PATH/power/control"
+          fi
+          if [ -w "$BOOT_NVME_PATH/d3cold_allowed" ]; then
+            ${pkgs.coreutils}/bin/echo 0 > "$BOOT_NVME_PATH/d3cold_allowed"
+          fi
 
           if [ ! -e /dev/vfio/vfio ]; then
             MISSING="$MISSING /dev/vfio/vfio"
           fi
           if [ ! -e /dev/tpmrm0 ]; then
             MISSING="$MISSING /dev/tpmrm0"
-          elif ! ${pkgs.tpm2-tools}/bin/tpm2_getcap properties-fixed >/dev/null 2>&1; then
-            MISSING="$MISSING tpm-not-ready"
+            TPM_READY=0
+          elif [ "$TPM_READY" -eq 0 ]; then
+            if ${pkgs.tpm2-tools}/bin/tpm2_getcap properties-fixed >/dev/null 2>&1; then
+              TPM_READY=1
+            else
+              MISSING="$MISSING tpm-not-ready"
+            fi
           fi
           for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
             if [ ! -e "/sys/bus/pci/devices/$DEVICE" ]; then
               MISSING="$MISSING $DEVICE"
+              continue
+            fi
+
+            PCI_VENDOR="$(${pkgs.pciutils}/bin/setpci -s "$DEVICE" VENDOR_ID 2>/dev/null || true)"
+            if [ -z "$PCI_VENDOR" ] || [ "$PCI_VENDOR" = "ffff" ] || [ "$PCI_VENDOR" = "0000" ]; then
+              MISSING="$MISSING $DEVICE-config-space-unresponsive"
             fi
           done
 
-          if [ -z "$MISSING" ]; then
-            return
+          if [ -r "$BOOT_NVME_PATH/power/control" ]; then
+            BOOT_NVME_POWER_CONTROL="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/control")"
+            if [ "$BOOT_NVME_POWER_CONTROL" != "on" ]; then
+              MISSING="$MISSING $BOOT_NVME-runtime-pm-$BOOT_NVME_POWER_CONTROL"
+            fi
+          fi
+          if [ -r "$BOOT_NVME_PATH/power/runtime_status" ]; then
+            BOOT_NVME_RUNTIME_STATUS="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/runtime_status")"
+            case "$BOOT_NVME_RUNTIME_STATUS" in
+              active|unsupported)
+                ;;
+              *)
+                MISSING="$MISSING $BOOT_NVME-runtime-$BOOT_NVME_RUNTIME_STATUS"
+                ;;
+            esac
+          fi
+          if [ -r "$BOOT_NVME_PATH/power_state" ]; then
+            BOOT_NVME_POWER_STATE="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power_state")"
+            if [ "$BOOT_NVME_POWER_STATE" != "D0" ]; then
+              MISSING="$MISSING $BOOT_NVME-power-$BOOT_NVME_POWER_STATE"
+            fi
+          fi
+          if [ -r "$BOOT_NVME_PATH/d3cold_allowed" ]; then
+            BOOT_NVME_D3COLD_ALLOWED="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed")"
+            if [ "$BOOT_NVME_D3COLD_ALLOWED" != "0" ]; then
+              MISSING="$MISSING $BOOT_NVME-d3cold-allowed"
+            fi
           fi
 
-          echo "Waiting for win11 startup devices:$MISSING"
+          for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
+            DRIVER="$(${pkgs.coreutils}/bin/readlink -f "/sys/bus/pci/devices/$DEVICE/driver" 2>/dev/null || true)"
+            if [ "$DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
+              MISSING="$MISSING $DEVICE-not-vfio"
+            fi
+          done
+
+          for DEVICE in ${builtins.concatStringsSep " " win11LibvirtManagedDevices}; do
+            DRIVER="$(${pkgs.coreutils}/bin/readlink -f "/sys/bus/pci/devices/$DEVICE/driver" 2>/dev/null || true)"
+            if [ -z "$DRIVER" ]; then
+              MISSING="$MISSING $DEVICE-no-driver"
+            fi
+          done
+
+          FREE_HUGEPAGES="$(${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || ${pkgs.coreutils}/bin/echo 0)"
+          if [ "$FREE_HUGEPAGES" -lt "$REQUIRED_HUGEPAGES_1G" ]; then
+            MISSING="$MISSING hugepages-$FREE_HUGEPAGES-of-$REQUIRED_HUGEPAGES_1G"
+          fi
+
+          if [ -z "$MISSING" ]; then
+            STABLE_SAMPLES="$((STABLE_SAMPLES + 1))"
+            echo "win11 preflight stable sample $STABLE_SAMPLES/$REQUIRED_STABLE_SAMPLES"
+            if [ "$STABLE_SAMPLES" -ge "$REQUIRED_STABLE_SAMPLES" ]; then
+              return
+            fi
+          else
+            STABLE_SAMPLES=0
+            echo "Waiting for stable win11 preflight:$MISSING"
+          fi
+
           ${pkgs.coreutils}/bin/sleep 1
         done
 
-        echo "Timed out waiting for win11 startup devices:$MISSING" >&2
+        echo "Timed out waiting for a stable win11 preflight:$MISSING" >&2
+        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2 || true
         exit 1
       }
 
@@ -638,27 +610,13 @@ EOF
           ;;
       esac
 
-      wait_for_startup_devices
-
-      # Devices selected through vfio-pci.ids must already be attached to VFIO.
-      # The two exact USB controllers intentionally remain libvirt-managed
-      # because their PCI ID is shared with host-owned USB controllers.
-      for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
-        verify_vfio_binding "$DEVICE"
-      done
-
-      # QEMU opens and initializes every VFIO device before guest CPUs execute.
-      # Keeping the domain paused gives slow passthrough hardware time to settle
-      # without running OVMF or allowing Windows to touch its filesystems.
-      ${pkgs.libvirt}/bin/virsh start win11 --paused
-      echo "Waiting $PAUSED_DEVICE_SETTLE_SECONDS seconds with win11 safely paused for passthrough initialization."
-      ${pkgs.coreutils}/bin/sleep "$PAUSED_DEVICE_SETTLE_SECONDS"
-
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q paused; then
-        ${pkgs.libvirt}/bin/virsh resume win11
-        echo "win11 resumed after paused passthrough initialization."
-      else
-        echo "win11 did not remain paused during passthrough initialization; leaving it unchanged." >&2
+      # Require the complete passthrough stack and boot-reserved memory to stay
+      # ready before QEMU touches the physical Windows disk. Start once,
+      # normally; never pause, reset, destroy, or automatically retry.
+      wait_for_stable_preflight
+      echo "Starting win11 once after a stable host-side preflight."
+      if ! ${pkgs.libvirt}/bin/virsh start win11; then
+        ${pkgs.coreutils}/bin/tail -n 80 /var/log/libvirt/qemu/win11.log 2>/dev/null >&2 || true
         exit 1
       fi
 
@@ -798,6 +756,7 @@ EOF
         echo 0 > /proc/sys/vm/nr_hugepages
       fi
 
+      echo "The next win11 start will fail safely until the host is rebooted and its 1G hugepages are reserved again."
       echo "Hugepages after release:"
       ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo
       echo "1G hugepages:"
@@ -932,8 +891,41 @@ EOF
       done
 
       echo
+      echo "== Boot-critical PCI readiness =="
+      for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
+        DEVICE_PATH="/sys/bus/pci/devices/$DEVICE"
+        ${pkgs.coreutils}/bin/printf '%s reset-method=' "$DEVICE"
+        ${pkgs.coreutils}/bin/cat "$DEVICE_PATH/reset_method" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+        ${pkgs.coreutils}/bin/printf '%s power-state=' "$DEVICE"
+        ${pkgs.coreutils}/bin/cat "$DEVICE_PATH/power_state" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+        ${pkgs.coreutils}/bin/printf '%s link=' "$DEVICE"
+        SPEED="$(${pkgs.coreutils}/bin/cat "$DEVICE_PATH/current_link_speed" 2>/dev/null || true)"
+        WIDTH="$(${pkgs.coreutils}/bin/cat "$DEVICE_PATH/current_link_width" 2>/dev/null || true)"
+        ${pkgs.coreutils}/bin/echo "$SPEED x$WIDTH"
+      done
+      BOOT_NVME_PATH="/sys/bus/pci/devices/${win11BootNvme}"
+      ${pkgs.coreutils}/bin/printf '${win11BootNvme} runtime-control='
+      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/control" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+      ${pkgs.coreutils}/bin/printf '${win11BootNvme} runtime-status='
+      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/runtime_status" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+      ${pkgs.coreutils}/bin/printf '${win11BootNvme} d3cold-allowed='
+      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+      echo "recent PCI/VFIO/NVMe kernel messages:"
+      ${pkgs.systemd}/bin/journalctl -b -k --no-pager | ${pkgs.gnugrep}/bin/grep -Ei 'vfio|aer|pcie|nvme|22:00.0|iommu' | ${pkgs.coreutils}/bin/tail -n 120 || true
+
+      echo
       echo "== Lifecycle =="
       ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service win11-power-sync-monitor.service || true
+      LEGACY_HOOKS=0
+      for HOOK in /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu; do
+        if [ -e "$HOOK" ]; then
+          echo "legacy-qemu-hook-present=$HOOK"
+          LEGACY_HOOKS=1
+        fi
+      done
+      if [ "$LEGACY_HOOKS" -eq 0 ]; then
+        echo "legacy-qemu-hooks=absent"
+      fi
       if [ -e /run/win11-power-sync.disabled ]; then
         echo "power-sync=disabled-for-this-boot"
       else
@@ -950,10 +942,15 @@ EOF
       ${pkgs.libvirt}/bin/virsh dominfo win11 2>/dev/null | ${pkgs.gnused}/bin/sed -n 's/^Autostart:[[:space:]]*//p' || true
       echo "recent QEMU log:"
       ${pkgs.coreutils}/bin/tail -n 40 /var/log/libvirt/qemu/win11.log 2>/dev/null || true
+      echo "startup journal:"
+      ${pkgs.systemd}/bin/journalctl -b --no-pager -n 120 -u define-win11-vm.service -u start-win11-vm.service || true
 
       echo
       echo "== Hugepages =="
       ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize' /proc/meminfo
+      ${pkgs.coreutils}/bin/printf 'free-1g-hugepages='
+      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || true
+      ${pkgs.coreutils}/bin/printf 'total-1g-hugepages='
       ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
     '')
   ];

@@ -30,10 +30,18 @@ Current stable profile for the `win11` libvirt domain.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.
-- Startup waits for udev/network readiness and verifies that the physical TPM
-  responds before QEMU starts.
-- Safe paused startup: QEMU initializes VFIO devices for 30 seconds before
-  guest CPUs and Windows storage are allowed to run.
+- Startup requires the passthrough devices and their PCI config space, early
+  VFIO bindings, physical TPM, and all 16 boot-reserved 1 GiB hugepages to
+  remain ready across five consecutive checks before QEMU starts.
+- The physical boot NVMe remains in PCI D0 from host PCI enumeration onward;
+  host runtime PM and D3cold are disabled for that device during the NixOS boot.
+- Initrd-bound VFIO devices remain bound throughout VM lifecycle transitions;
+  only the two shared-ID USB controllers are detached and reattached by libvirt.
+- A single normal QEMU start; no paused startup delay or automatic reset.
+- Routine autostart never rewrites persistent OVMF NVRAM.
+- Hugepages remain reserved for the host boot. No synchronous libvirt hook
+  compacts memory, drops caches, or changes hugepage allocation during VM
+  lifecycle events.
 - Host-only libvirt lifecycle and reboot monitoring powers off NixOS only after
   a normal guest shutdown that leaves the domain off; no Windows-side tooling
   is required.
@@ -49,6 +57,7 @@ Current stable profile for the `win11` libvirt domain.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
 - No runtime IRQ or workqueue repinning from the libvirt hook.
+- No runtime hugepage allocation or release from a libvirt hook.
 - No host-initiated automatic guest reset, reboot, destroy, or retry after a
   startup failure. Guest-requested Windows restarts retain normal semantics.
 

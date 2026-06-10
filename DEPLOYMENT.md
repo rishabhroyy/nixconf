@@ -35,12 +35,31 @@ sudo virsh list --all
 sudo verify-win11-vfio
 ```
 
+`verify-win11-vfio` includes the current startup journal, QEMU log tail,
+boot-critical PCI reset methods and link state, hugepage availability, and
+whether any legacy synchronous QEMU hook remains.
+
 The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
-independent autostart path, waits for the generated VM definition, verifies the
-passthrough stack and physical TPM readiness after udev/network startup, starts
-Windows paused, waits 30 seconds for VFIO devices to settle without running
-guest code, then resumes Windows once. It never resets, reboots, destroys, or
-retries the guest automatically.
+independent autostart path, waits for the generated VM definition, and requires
+the complete passthrough stack, responsive PCI config space, physical TPM, VFIO
+bindings, and all 16 boot-reserved 1 GiB hugepages to remain ready for five
+consecutive checks.
+It then starts Windows normally exactly once. It never pauses, resets, reboots,
+destroys, or retries the guest automatically.
+
+The passed-through boot NVMe is kept in PCI D0 from host PCI enumeration onward,
+with host runtime PM and D3cold disabled for the NixOS boot. Devices bound to
+`vfio-pci` during initrd are unmanaged by libvirt, avoiding redundant
+detach/reattach transitions.
+
+The VM's hugepages are reserved once by the kernel command line and remain
+reserved for the host boot. No libvirt hook compacts memory, drops caches,
+allocates pages, or frees pages during VM lifecycle events. This deliberately
+trades reclaiming 16 GiB after VM shutdown for deterministic subsequent starts.
+
+Routine boot never rewrites the VM's persistent OVMF NVRAM. Secure Boot key
+enrollment is an explicit maintenance action through
+`sudo enroll-win11-secureboot-keys`, not part of domain definition or autostart.
 
 The VM keeps an 8-core / 16-thread topology. Four physical cores remain shared
 with NixOS, while four are isolated for latency-sensitive guest work. Only the
@@ -115,8 +134,9 @@ powering off NixOS. It remains effective across service restarts and
 configuration switches until `enable-power-sync` is run or the NixOS host
 boots again.
 
-The physical power button path still asks the VM to shut down first, waits
-briefly, then powers off the host.
+The physical power button requests a clean guest shutdown and lets the same
+lifecycle monitor power off the host. It never cuts host power merely because
+a timeout expired.
 
 To skip VM autostart for one boot, edit the boot entry and add either:
 
