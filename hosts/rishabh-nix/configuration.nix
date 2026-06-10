@@ -253,29 +253,15 @@ in
     (pkgs.writeShellScriptBin "reboot-to-windows" ''
       set -eu
 
-      POWER_SYNC_MARKER=/run/win11-power-sync.disabled
-      ${pkgs.coreutils}/bin/touch "$POWER_SYNC_MARKER"
-      trap '${pkgs.coreutils}/bin/rm -f "$POWER_SYNC_MARKER"' EXIT
-
-      ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
-      if printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
-        echo "Requesting a clean Windows VM shutdown before bare-metal boot."
-        ${pkgs.libvirt}/bin/virsh shutdown win11
-
-        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 120); do
-          ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
-          if ! printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
-            break
-          fi
-          ${pkgs.coreutils}/bin/sleep 1
-        done
-
-        ACTIVE_DOMAINS="$(${pkgs.libvirt}/bin/virsh list --name)"
-        if printf '%s\n' "$ACTIVE_DOMAINS" | ${pkgs.gnugrep}/bin/grep -qx win11; then
-          echo "Windows VM did not shut down cleanly; refusing to reboot into the same physical disk." >&2
+      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
+      case "$CURRENT_STATE" in
+        running|paused|blocked|pmsuspended|"in shutdown")
+          ;;
+        *)
+          echo "win11 is not active ($CURRENT_STATE); there is no guest shutdown to wait for." >&2
           exit 1
-        fi
-      fi
+          ;;
+      esac
 
       BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
         BEGIN { IGNORECASE = 1 }
@@ -294,9 +280,15 @@ in
         exit 1
       fi
 
-      echo "Setting one-time UEFI BootNext to Windows Boot Manager (Boot$BOOTNUM)."
-      ${pkgs.efibootmgr}/bin/efibootmgr --bootnext "$BOOTNUM"
-      ${pkgs.systemd}/bin/systemctl reboot
+      ${pkgs.coreutils}/bin/touch /run/win11-boot-baremetal-next
+      echo "Waiting for win11 to shut down normally; the VM and NixOS host were left running."
+      echo "After that clean shutdown, Windows Boot Manager (Boot$BOOTNUM) will be armed for the next host startup."
+
+      if [ -e /run/win11-power-sync.disabled ]; then
+        echo "Warning: power sync is disabled, so shutting down the VM will not power off NixOS." >&2
+      elif ! ${pkgs.systemd}/bin/systemctl is-active --quiet win11-power-sync-monitor.service; then
+        echo "Warning: the power-sync monitor is not active, so verify the host powers off before the next startup." >&2
+      fi
     '')
     (pkgs.writeShellScriptBin "update-containers" ''
       echo "Pulling latest images for all stacks..."

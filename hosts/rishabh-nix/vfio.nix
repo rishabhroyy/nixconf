@@ -31,6 +31,8 @@ in
     "isolcpus=domain,managed_irq,4-7,12-15"
     "nohz_full=4-7,12-15"
     "rcu_nocbs=4-7,12-15"
+    # Keep offloaded RCU callbacks from waking latency-sensitive guest CPUs.
+    "rcu_nocb_poll"
     "irqaffinity=0-3,8-11"
     "workqueue.unbound_cpus=0-3,8-11"
     "systemd.cpu_affinity=0-3,8-11"
@@ -173,6 +175,34 @@ in
       set -uo pipefail
       export LC_ALL=C
       REBOOT_MARKER=/run/win11-reboot-requested
+      BAREMETAL_NEXT_MARKER=/run/win11-boot-baremetal-next
+
+      set_windows_bootnext() {
+        BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
+          BEGIN { IGNORECASE = 1 }
+          /^Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]/ && /Windows Boot Manager/ {
+            boot = $1
+            gsub(/^Boot/, "", boot)
+            gsub(/\*/, "", boot)
+            print boot
+            exit
+          }
+        ')"
+
+        if [ -z "$BOOTNUM" ]; then
+          echo "Bare-metal Windows was requested, but no Windows Boot Manager UEFI entry exists; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync -p err
+          return 1
+        fi
+
+        if ${pkgs.efibootmgr}/bin/efibootmgr --bootnext "$BOOTNUM" >/dev/null; then
+          ${pkgs.coreutils}/bin/rm -f "$BAREMETAL_NEXT_MARKER"
+          echo "Armed Windows Boot Manager (Boot$BOOTNUM) for the next host startup." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+          return 0
+        fi
+
+        echo "Failed to arm Windows Boot Manager for the next host startup; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync -p err
+        return 1
+      }
 
       ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --all --loop --timestamp |
         while IFS= read -r EVENT; do
@@ -222,6 +252,9 @@ in
 
                 CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
                 if [ "$CURRENT_STATE" = "shut off" ]; then
+                  if [ -e "$BAREMETAL_NEXT_MARKER" ] && ! set_windows_bootnext; then
+                    exit 0
+                  fi
                   echo "Windows 11 completed a clean shutdown and remains off; powering off NixOS." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
                   ${pkgs.systemd}/bin/systemctl poweroff
                 else
@@ -839,6 +872,7 @@ EOF
       echo
       echo "== CPU / Hypervisor Masking =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "poll-control state='on'" || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
@@ -874,6 +908,10 @@ EOF
       ${pkgs.systemd}/bin/systemctl show libvirtd.service --property=LimitRTPRIO --value || true
       ${pkgs.coreutils}/bin/printf 'kernel-command-line='
       ${pkgs.coreutils}/bin/cat /proc/cmdline
+      ${pkgs.coreutils}/bin/printf 'rcu-nocb-poll='
+      if ${pkgs.gnugrep}/bin/grep -qw 'rcu_nocb_poll' /proc/cmdline; then ${pkgs.coreutils}/bin/echo enabled; else ${pkgs.coreutils}/bin/echo missing; fi
+      ${pkgs.coreutils}/bin/printf 'nmi-watchdog='
+      ${pkgs.coreutils}/bin/cat /proc/sys/kernel/nmi_watchdog 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'unbound-workqueue-cpumask='
       ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
       echo "threads currently executing on latency-sensitive CPUs:"
@@ -900,6 +938,11 @@ EOF
         echo "power-sync=disabled-for-this-boot"
       else
         echo "power-sync=enabled"
+      fi
+      if [ -e /run/win11-boot-baremetal-next ]; then
+        echo "baremetal-next=waiting-for-clean-guest-shutdown"
+      else
+        echo "baremetal-next=not-armed"
       fi
       ${pkgs.coreutils}/bin/printf 'domain-state='
       ${pkgs.libvirt}/bin/virsh domstate win11 --reason 2>/dev/null || true
