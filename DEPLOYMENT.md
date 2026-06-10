@@ -46,6 +46,12 @@ The VM keeps an 8-core / 16-thread topology. Four physical cores remain shared
 with NixOS, while four are isolated for latency-sensitive guest work. Only the
 vCPU threads pinned to isolated cores use low-priority real-time round-robin
 scheduling; QEMU housekeeping and host workloads keep normal scheduling.
+Windows' first four guest cores map to the isolated cores so foreground work,
+device interrupts, and DPCs are more likely to avoid host scheduling jitter.
+KVM poll-control briefly waits for guest wakeups to avoid some scheduler
+round trips, and `rcu_nocb_poll` prevents offloaded RCU callback processing
+from repeatedly waking the isolated guest CPUs. The host NMI watchdog remains
+enabled for hard-lockup diagnosis.
 
 The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
 and reboot events. It powers off NixOS only after libvirt reports the specific
@@ -74,7 +80,7 @@ instead.
 
 ## One-Time Boot Switching
 
-From NixOS, reboot once into the bare-metal Windows boot entry:
+From NixOS, arm the next host startup for the bare-metal Windows boot entry:
 
 ```bash
 sudo reboot-to-windows
@@ -87,9 +93,12 @@ From Windows, run PowerShell as Administrator from this repo checkout:
 ```
 
 Both commands use UEFI BootNext/bootsequence, so the change is one-time rather
-than a permanent boot order edit. `reboot-to-windows` first waits for the VFIO
-guest to shut down cleanly and refuses to reboot if the physical Windows disk
-is still active in QEMU.
+than a permanent boot order edit. `reboot-to-windows` records the request but
+does not stop the VM, write BootNext early, or reboot the host. Shut down
+Windows normally when ready. After that clean shutdown, the power-sync monitor
+writes BootNext immediately before powering off NixOS, so an unrelated earlier
+host reboot cannot consume the request. The command warns if power sync is
+disabled or unavailable.
 
 ## Power Sync
 

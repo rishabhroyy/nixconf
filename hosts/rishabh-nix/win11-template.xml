@@ -9,26 +9,29 @@
   </memoryBacking>
   <vcpu placement='static'>16</vcpu>
   <cputune>
-    <!-- Guest cores 0-3 share host cores; guest cores 4-7 stay isolated. -->
-    <vcpupin vcpu='0' cpuset='0'/>
-    <vcpupin vcpu='1' cpuset='8'/>
-    <vcpupin vcpu='2' cpuset='1'/>
-    <vcpupin vcpu='3' cpuset='9'/>
-    <vcpupin vcpu='4' cpuset='2'/>
-    <vcpupin vcpu='5' cpuset='10'/>
-    <vcpupin vcpu='6' cpuset='3'/>
-    <vcpupin vcpu='7' cpuset='11'/>
-    <vcpupin vcpu='8' cpuset='4'/>
-    <vcpupin vcpu='9' cpuset='12'/>
-    <vcpupin vcpu='10' cpuset='5'/>
-    <vcpupin vcpu='11' cpuset='13'/>
-    <vcpupin vcpu='12' cpuset='6'/>
-    <vcpupin vcpu='13' cpuset='14'/>
-    <vcpupin vcpu='14' cpuset='7'/>
-    <vcpupin vcpu='15' cpuset='15'/>
+    <!-- Put Windows' first four guest cores on isolated host cores. Foreground
+         work, interrupts, and DPCs commonly favor these low-numbered CPUs. -->
+    <vcpupin vcpu='0' cpuset='4'/>
+    <vcpupin vcpu='1' cpuset='12'/>
+    <vcpupin vcpu='2' cpuset='5'/>
+    <vcpupin vcpu='3' cpuset='13'/>
+    <vcpupin vcpu='4' cpuset='6'/>
+    <vcpupin vcpu='5' cpuset='14'/>
+    <vcpupin vcpu='6' cpuset='7'/>
+    <vcpupin vcpu='7' cpuset='15'/>
+    <!-- Keep four additional guest cores visible on the housekeeping CPUs so
+         Windows retains the bare-metal-like 8-core / 16-thread topology. -->
+    <vcpupin vcpu='8' cpuset='0'/>
+    <vcpupin vcpu='9' cpuset='8'/>
+    <vcpupin vcpu='10' cpuset='1'/>
+    <vcpupin vcpu='11' cpuset='9'/>
+    <vcpupin vcpu='12' cpuset='2'/>
+    <vcpupin vcpu='13' cpuset='10'/>
+    <vcpupin vcpu='14' cpuset='3'/>
+    <vcpupin vcpu='15' cpuset='11'/>
     <emulatorpin cpuset='0-3,8-11'/>
     <!-- Only vCPUs on host-isolated cores receive latency-oriented scheduling. -->
-    <vcpusched vcpus='8-15' scheduler='rr' priority='1'/>
+    <vcpusched vcpus='0-7' scheduler='rr' priority='1'/>
   </cputune>
   <os>
     <type arch='x86_64' machine='pc-q35-8.2'>hvm</type>
@@ -70,6 +73,9 @@
 $HYPERV_FEATURES
     <kvm>
       <hidden state='on'/>
+      <!-- Briefly poll for guest wakeups to avoid scheduler round trips on
+           latency-sensitive I/O completions. -->
+      <poll-control state='on'/>
     </kvm>
     <ioapic driver='kvm'/>
   </features>

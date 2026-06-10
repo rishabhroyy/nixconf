@@ -15,9 +15,14 @@ Current stable profile for the `win11` libvirt domain.
 - 16 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
   and an 8-core / 16-thread topology.
 - Physical cores 4-7 isolated for the VM; physical cores 0-3 shared with NixOS.
-- The eight vCPU threads on isolated cores use low-priority real-time
-  round-robin scheduling; shared guest cores and host work retain normal
+- Windows guest cores 0-3 map to isolated physical cores 4-7 so foreground
+  work, interrupts, and DPCs preferentially land away from host activity.
+- The eight vCPU threads on those isolated cores use low-priority real-time
+  round-robin scheduling; guest cores 4-7 and host work retain normal
   scheduling.
+- KVM poll-control reduces scheduler round trips for short guest wakeups.
+- Offloaded RCU callbacks use polling so they do not repeatedly wake isolated
+  guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
   containers prefer the housekeeping CPUs on physical cores 0-3.
 - Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
@@ -32,6 +37,9 @@ Current stable profile for the `win11` libvirt domain.
 - Host-only libvirt lifecycle and reboot monitoring powers off NixOS only after
   a normal guest shutdown that leaves the domain off; no Windows-side tooling
   is required.
+- `reboot-to-windows` defers its one-time UEFI BootNext write until the guest
+  later completes a clean shutdown, immediately before the monitor powers off
+  NixOS.
 
 ## Not Active
 
