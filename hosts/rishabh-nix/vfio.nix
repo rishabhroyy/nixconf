@@ -1,9 +1,9 @@
 { config, pkgs, ... }:
 
 let
-  # The devices we want to pass through to the Windows 11 VM.
-  # Keep this on the known-working global binding path.
-  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
+  # Devices that remain bound to vfio-pci for the whole NixOS boot. The boot
+  # NVMe is intentionally excluded so Linux can initialize it before handoff.
+  vfioIds = [ "1002:73df" "1002:ab28" "10ec:8125" "1b21:0612" ];
   win11VfioDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
@@ -16,11 +16,11 @@ let
   win11EarlyBoundDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
-    "0000:22:00.0"
     "0000:26:00.0"
     "0000:29:00.0"
   ];
   win11LibvirtManagedDevices = [
+    "0000:22:00.0"
     "0000:2a:00.1"
     "0000:2a:00.3"
   ];
@@ -56,8 +56,10 @@ in
   # normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
-  # Load VFIO modules
+  # Load the host NVMe driver alongside VFIO. The physical Windows boot
+  # controller is initialized by nvme before libvirt hands it to VFIO.
   boot.initrd.kernelModules = [
+    "nvme"
     "vfio_pci"
     "vfio"
     "vfio_iommu_type1"
@@ -488,9 +490,10 @@ EOF
           MISSING=""
           BOOT_NVME_PATH="/sys/bus/pci/devices/$BOOT_NVME"
 
-          # The boot NVMe is already owned by vfio-pci. Keep it fully powered
-          # before QEMU starts so OVMF and winload.efi never race a PCI runtime
-          # resume or a D3cold power-on transition.
+          # Linux initializes the physical boot NVMe before libvirt detaches it
+          # into VFIO. Keep it fully powered so OVMF and winload.efi receive an
+          # already-proven controller instead of performing its first cold
+          # initialization.
           if [ -w "$BOOT_NVME_PATH/power/control" ]; then
             ${pkgs.coreutils}/bin/echo on > "$BOOT_NVME_PATH/power/control"
           fi
@@ -549,6 +552,61 @@ EOF
             BOOT_NVME_D3COLD_ALLOWED="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed")"
             if [ "$BOOT_NVME_D3COLD_ALLOWED" != "0" ]; then
               MISSING="$MISSING $BOOT_NVME-d3cold-allowed"
+            fi
+          fi
+
+          BOOT_NVME_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$BOOT_NVME_PATH/driver" 2>/dev/null || true)"
+          if [ "$BOOT_NVME_DRIVER" != "/sys/bus/pci/drivers/nvme" ]; then
+            MISSING="$MISSING $BOOT_NVME-not-initialized-by-host-nvme"
+          else
+            BOOT_NVME_CONTROLLERS=0
+            for CONTROLLER in "$BOOT_NVME_PATH"/nvme/nvme*; do
+              if [ ! -e "$CONTROLLER/state" ]; then
+                continue
+              fi
+
+              BOOT_NVME_CONTROLLERS="$((BOOT_NVME_CONTROLLERS + 1))"
+              BOOT_NVME_CONTROLLER_STATE="$(${pkgs.coreutils}/bin/cat "$CONTROLLER/state")"
+              if [ "$BOOT_NVME_CONTROLLER_STATE" != "live" ]; then
+                MISSING="$MISSING $BOOT_NVME-controller-$BOOT_NVME_CONTROLLER_STATE"
+              fi
+            done
+            if [ "$BOOT_NVME_CONTROLLERS" -eq 0 ]; then
+              MISSING="$MISSING $BOOT_NVME-no-host-controller"
+            fi
+
+            BOOT_NVME_NAMESPACES=0
+            for NAMESPACE_PATH in "$BOOT_NVME_PATH"/nvme/nvme*/nvme*n*; do
+              if [ ! -e "$NAMESPACE_PATH/dev" ]; then
+                continue
+              fi
+
+              BOOT_NVME_NAMESPACES="$((BOOT_NVME_NAMESPACES + 1))"
+              NAMESPACE="/dev/$(${pkgs.coreutils}/bin/basename "$NAMESPACE_PATH")"
+              if ! ${pkgs.coreutils}/bin/dd if="$NAMESPACE" of=/dev/null bs=4096 count=1 iflag=direct status=none; then
+                MISSING="$MISSING $NAMESPACE-direct-read-failed"
+              fi
+
+              for BLOCK_DEVICE in $(${pkgs.util-linux}/bin/lsblk -nrpo NAME "$NAMESPACE" 2>/dev/null || true); do
+                BLOCK_NAME="$(${pkgs.coreutils}/bin/basename "$BLOCK_DEVICE")"
+
+                if ${pkgs.util-linux}/bin/lsblk -nrpo MOUNTPOINTS "$BLOCK_DEVICE" 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q '[^[:space:]]'; then
+                  MISSING="$MISSING $BLOCK_DEVICE-mounted-on-host"
+                fi
+                if ${pkgs.gnugrep}/bin/grep -q "^$BLOCK_DEVICE[[:space:]]" /proc/swaps; then
+                  MISSING="$MISSING $BLOCK_DEVICE-used-as-swap"
+                fi
+                for HOLDER in "/sys/class/block/$BLOCK_NAME/holders/"*; do
+                  if [ -e "$HOLDER" ]; then
+                    MISSING="$MISSING $BLOCK_DEVICE-has-holder"
+                    break
+                  fi
+                done
+              done
+            done
+
+            if [ "$BOOT_NVME_NAMESPACES" -eq 0 ]; then
+              MISSING="$MISSING $BOOT_NVME-no-host-namespaces"
             fi
           fi
 
@@ -614,6 +672,11 @@ EOF
       # ready before QEMU touches the physical Windows disk. Start once,
       # normally; never pause, reset, destroy, or automatically retry.
       wait_for_stable_preflight
+      for CONTROLLER in "/sys/bus/pci/devices/$BOOT_NVME"/nvme/nvme*; do
+        if [ -e "$CONTROLLER" ]; then
+          echo "Boot NVMe initialized by host: model=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/model" 2>/dev/null || true) firmware=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/firmware_rev" 2>/dev/null || true) state=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/state" 2>/dev/null || true)"
+        fi
+      done
       echo "Starting win11 once after a stable host-side preflight."
       if ! ${pkgs.libvirt}/bin/virsh start win11; then
         ${pkgs.coreutils}/bin/tail -n 80 /var/log/libvirt/qemu/win11.log 2>/dev/null >&2 || true
@@ -910,6 +973,19 @@ EOF
       ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/runtime_status" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
       ${pkgs.coreutils}/bin/printf '${win11BootNvme} d3cold-allowed='
       ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+      ${pkgs.coreutils}/bin/printf '${win11BootNvme} host-driver='
+      ${pkgs.coreutils}/bin/readlink -f "$BOOT_NVME_PATH/driver" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
+      echo "${win11BootNvme} host namespaces:"
+      for CONTROLLER in "$BOOT_NVME_PATH"/nvme/nvme*; do
+        if [ -e "$CONTROLLER" ]; then
+          ${pkgs.coreutils}/bin/printf 'model='
+          ${pkgs.coreutils}/bin/cat "$CONTROLLER/model" 2>/dev/null || true
+          ${pkgs.coreutils}/bin/printf 'firmware='
+          ${pkgs.coreutils}/bin/cat "$CONTROLLER/firmware_rev" 2>/dev/null || true
+          ${pkgs.coreutils}/bin/printf 'state='
+          ${pkgs.coreutils}/bin/cat "$CONTROLLER/state" 2>/dev/null || true
+        fi
+      done
       echo "recent PCI/VFIO/NVMe kernel messages:"
       ${pkgs.systemd}/bin/journalctl -b -k --no-pager | ${pkgs.gnugrep}/bin/grep -Ei 'vfio|aer|pcie|nvme|22:00.0|iommu' | ${pkgs.coreutils}/bin/tail -n 120 || true
 

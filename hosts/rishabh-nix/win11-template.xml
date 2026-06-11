@@ -142,7 +142,9 @@ $HYPERVCLOCK_TIMER
 
     <!-- NVMe Boot Drive Passthrough (Samsung 980 Pro) -->
     <!-- Mapped to 02:00.0 -->
-    <hostdev mode='subsystem' type='pci' managed='no'>
+    <!-- Let Linux initialize and prove the physical controller first; libvirt
+         then detaches it into VFIO immediately before QEMU starts. -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
         <address domain='0x0000' bus='0x22' slot='0x00' function='0x0'/>
       </source>

@@ -48,9 +48,13 @@ It then starts Windows normally exactly once. It never pauses, resets, reboots,
 destroys, or retries the guest automatically.
 
 The passed-through boot NVMe is kept in PCI D0 from host PCI enumeration onward,
-with host runtime PM and D3cold disabled for the NixOS boot. Devices bound to
-`vfio-pci` during initrd are unmanaged by libvirt, avoiding redundant
-detach/reattach transitions.
+with host runtime PM and D3cold disabled for the NixOS boot. Linux's NVMe driver
+initializes the controller, enumerates its namespaces, and completes repeated
+read-only direct-I/O probes first. Startup refuses to continue if any namespace
+cannot be read, is mounted, used as swap, or held by another host device.
+Libvirt then detaches that proven-unused controller into VFIO immediately before
+QEMU starts. Other devices bound to `vfio-pci` during initrd remain unmanaged by
+libvirt.
 
 The VM's hugepages are reserved once by the kernel command line and remain
 reserved for the host boot. No libvirt hook compacts memory, drops caches,
