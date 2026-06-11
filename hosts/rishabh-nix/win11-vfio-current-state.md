@@ -30,17 +30,11 @@ Current stable profile for the `win11` libvirt domain.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.
-- Startup requires the passthrough devices and their PCI config space, early
-  VFIO bindings, physical TPM, and all 16 boot-reserved 1 GiB hugepages to
-  remain ready across five consecutive checks before QEMU starts.
-- The physical boot NVMe remains in PCI D0 from host PCI enumeration onward;
-  host runtime PM and D3cold are disabled for that device during the NixOS boot.
-- Linux's NVMe driver initializes the physical boot controller and proves that
-  its namespaces exist, are unused, and complete repeated read-only direct-I/O
-  probes before libvirt detaches it into VFIO.
-- Initrd-bound VFIO devices remain bound throughout VM lifecycle transitions;
-  the boot NVMe and two shared-ID USB controllers are managed by libvirt.
-- A single normal QEMU start; no paused startup delay or automatic reset.
+- Dedicated passthrough devices, including the physical boot NVMe, bind once to
+  `vfio-pci` during initrd and remain bound throughout the NixOS boot.
+- Only the two shared-ID USB controllers use libvirt-managed driver handoff.
+- A single normal QEMU start; no preflight probes, driver handoff for dedicated
+  devices, paused startup delay, or automatic reset.
 - Routine autostart never rewrites persistent OVMF NVRAM.
 - Hugepages remain reserved for the host boot. No synchronous libvirt hook
   compacts memory, drops caches, or changes hugepage allocation during VM

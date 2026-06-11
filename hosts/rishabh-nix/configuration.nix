@@ -1,4 +1,4 @@
-{ config, pkgs, inputs, lib, ... }:
+{ config, pkgs, lib, ... }:
 
 let
   # Flip this to true for a boring SSH/Tailscale-only rescue boot.
@@ -14,9 +14,16 @@ in
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  nix.settings.auto-optimise-store = true;
+  nix.gc = {
+    automatic = true;
+    dates = "weekly";
+    options = "--delete-older-than 30d";
+  };
 
   # Bootloader (Systemd-boot as default for modern UEFI)
   boot.loader.systemd-boot.enable = true;
+  boot.loader.systemd-boot.configurationLimit = 10;
   boot.loader.efi.canTouchEfiVariables = true;
 
   networking.hostName = "rishabh-nix";
@@ -157,7 +164,7 @@ in
         action = ''
           CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
           case "$CURRENT_STATE" in
-            "shut off"|"")
+            "shut off")
               ${pkgs.systemd}/bin/systemctl poweroff
               ;;
             running|blocked)
@@ -185,8 +192,7 @@ in
     # The ID ata-SanDisk_SSD_PLUS_1000GB_221306A0095A is used in the QEMU XML.
     KERNEL=="sd*", SUBSYSTEM=="block", ENV{ID_SERIAL}=="*SanDisk_SSD_PLUS_1000GB_221306A0095A*", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
     
-    # Linux initializes this controller before its safe libvirt/VFIO handoff.
-    # Keep every namespace hidden from desktop automounting during that window.
+    # Fallback protection if the dedicated NVMe ever fails to bind to vfio-pci.
     KERNEL=="nvme*", SUBSYSTEM=="block", ATTRS{model}=="Samsung SSD 980 PRO 1TB", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
   '';
 
@@ -213,12 +219,18 @@ in
     requires = [ "mnt-data4.mount" ];
   };
 
+  systemd.services.docker-seanime = lib.mkIf (!recoveryMode) {
+    after = [ "mnt-data4.mount" ];
+    requires = [ "mnt-data4.mount" ];
+  };
+
   # ---------------------------------------------------------
   # System Auto-Update & Maintenance
   # ---------------------------------------------------------
   system.autoUpgrade = {
     enable = lib.mkDefault (!recoveryMode);
     flake = "github:rishabhroyy/nixconf";
+    operation = "switch";
     allowReboot = false; # Never randomly restart the host
     dates = "04:00";
     randomizedDelaySec = "45min";
@@ -296,6 +308,8 @@ in
       fi
     '')
     (pkgs.writeShellScriptBin "update-containers" ''
+      set -euo pipefail
+
       echo "Pulling latest images for all stacks..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
@@ -308,27 +322,27 @@ in
       echo "Restarting all container stacks to apply updates and refresh sidecars..."
       
       # Immich Stack
-      systemctl restart docker-tailscale-immich.service \
-                        docker-immich-server.service \
-                        docker-immich-machine-learning.service \
-                        docker-immich-redis.service \
-                        docker-immich-database.service \
-                        docker-immich-proxy.service
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-immich.service \
+                                             docker-immich-server.service \
+                                             docker-immich-machine-learning.service \
+                                             docker-immich-redis.service \
+                                             docker-immich-database.service \
+                                             docker-immich-proxy.service
 
       # Seanime Stack
-      systemctl restart docker-tailscale-seanime.service \
-                        docker-seanime.service \
-                        docker-seanime-proxy.service
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-seanime.service \
+                                             docker-seanime.service \
+                                             docker-seanime-proxy.service
 
       # Portainer Stack
-      systemctl restart docker-tailscale-portainer.service \
-                        docker-portainer.service \
-                        docker-portainer-proxy.service
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-portainer.service \
+                                             docker-portainer.service \
+                                             docker-portainer-proxy.service
 
       # Copyparty Stack
-      systemctl restart docker-tailscale-copyparty.service \
-                        docker-copyparty.service \
-                        docker-copyparty-proxy.service
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-copyparty.service \
+                                             docker-copyparty.service \
+                                             docker-copyparty-proxy.service
       
       echo "All containers updated and restarted!"
     '')
@@ -347,6 +361,6 @@ in
     enable-power-sync = "sudo /run/current-system/sw/bin/enable-power-sync";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
     reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
-    nix-deploy = "cd /etc/nixos/nixconf && sudo git pull && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
+    nix-deploy = "cd /etc/nixos/nixconf && sudo git pull --ff-only && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
   };
 }

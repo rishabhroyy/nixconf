@@ -10,7 +10,10 @@ SOPS keys, and encrypted secrets.
 sudo nixos-rebuild switch --flake .#rishabh-nix --cores 14
 ```
 
-Use a reboot after kernel, VFIO, hugepage, or firmware changes.
+This applies changes in place. Automatic upgrades use the same behavior and
+never reboot the host. Kernel, initrd, bootloader, VFIO device-binding,
+hugepage-reservation, and firmware changes require a later reboot before they
+take effect.
 
 ## Required Secrets
 
@@ -40,21 +43,14 @@ boot-critical PCI reset methods and link state, hugepage availability, and
 whether any legacy synchronous QEMU hook remains.
 
 The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
-independent autostart path, waits for the generated VM definition, and requires
-the complete passthrough stack, responsive PCI config space, physical TPM, VFIO
-bindings, and all 16 boot-reserved 1 GiB hugepages to remain ready for five
-consecutive checks.
-It then starts Windows normally exactly once. It never pauses, resets, reboots,
-destroys, or retries the guest automatically.
+independent autostart path, waits for the generated VM definition, then starts
+Windows normally exactly once. It never pauses, probes, detaches, resets,
+reboots, destroys, or retries the guest automatically.
 
-The passed-through boot NVMe is kept in PCI D0 from host PCI enumeration onward,
-with host runtime PM and D3cold disabled for the NixOS boot. Linux's NVMe driver
-initializes the controller, enumerates its namespaces, and completes repeated
-read-only direct-I/O probes first. Startup refuses to continue if any namespace
-cannot be read, is mounted, used as swap, or held by another host device.
-Libvirt then detaches that proven-unused controller into VFIO immediately before
-QEMU starts. Other devices bound to `vfio-pci` during initrd remain unmanaged by
-libvirt.
+The dedicated GPU, boot NVMe, SATA controller, and NIC bind directly to
+`vfio-pci` during initrd and remain there for the NixOS boot. Their domain XML
+uses `managed='no'`, so libvirt does not detach or reattach host drivers. Only
+the two shared-ID USB controllers use libvirt-managed handoff.
 
 The VM's hugepages are reserved once by the kernel command line and remain
 reserved for the host boot. No libvirt hook compacts memory, drops caches,
