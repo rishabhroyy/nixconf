@@ -185,7 +185,8 @@ in
     # The ID ata-SanDisk_SSD_PLUS_1000GB_221306A0095A is used in the QEMU XML.
     KERNEL=="sd*", SUBSYSTEM=="block", ENV{ID_SERIAL}=="*SanDisk_SSD_PLUS_1000GB_221306A0095A*", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
     
-    # Hide the 1TB NVMe SSD (Samsung 980 Pro) from Linux (fallback protection if VFIO ever fails to bind)
+    # Linux initializes this controller before its safe libvirt/VFIO handoff.
+    # Keep every namespace hidden from desktop automounting during that window.
     KERNEL=="nvme*", SUBSYSTEM=="block", ATTRS{model}=="Samsung SSD 980 PRO 1TB", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
   '';
 

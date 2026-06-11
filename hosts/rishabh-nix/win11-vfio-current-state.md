@@ -35,8 +35,11 @@ Current stable profile for the `win11` libvirt domain.
   remain ready across five consecutive checks before QEMU starts.
 - The physical boot NVMe remains in PCI D0 from host PCI enumeration onward;
   host runtime PM and D3cold are disabled for that device during the NixOS boot.
+- Linux's NVMe driver initializes the physical boot controller and proves that
+  its namespaces exist, are unused, and complete repeated read-only direct-I/O
+  probes before libvirt detaches it into VFIO.
 - Initrd-bound VFIO devices remain bound throughout VM lifecycle transitions;
-  only the two shared-ID USB controllers are detached and reattached by libvirt.
+  the boot NVMe and two shared-ID USB controllers are managed by libvirt.
 - A single normal QEMU start; no paused startup delay or automatic reset.
 - Routine autostart never rewrites persistent OVMF NVRAM.
 - Hugepages remain reserved for the host boot. No synchronous libvirt hook
