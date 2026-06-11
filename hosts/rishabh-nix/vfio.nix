@@ -1,9 +1,9 @@
 { config, pkgs, ... }:
 
 let
-  # Devices that remain bound to vfio-pci for the whole NixOS boot. The boot
-  # NVMe is intentionally excluded so Linux can initialize it before handoff.
-  vfioIds = [ "1002:73df" "1002:ab28" "10ec:8125" "1b21:0612" ];
+  # Dedicated passthrough devices bind to vfio-pci once during initrd and stay
+  # there for the whole NixOS boot.
+  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
   win11VfioDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
@@ -16,15 +16,10 @@ let
   win11EarlyBoundDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
+    "0000:22:00.0"
     "0000:26:00.0"
     "0000:29:00.0"
   ];
-  win11LibvirtManagedDevices = [
-    "0000:22:00.0"
-    "0000:2a:00.1"
-    "0000:2a:00.3"
-  ];
-  win11BootNvme = "0000:22:00.0";
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -56,10 +51,8 @@ in
   # normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
-  # Load the host NVMe driver alongside VFIO. The physical Windows boot
-  # controller is initialized by nvme before libvirt hands it to VFIO.
+  # Load VFIO early so dedicated passthrough devices never bind to host drivers.
   boot.initrd.kernelModules = [
-    "nvme"
     "vfio_pci"
     "vfio"
     "vfio_iommu_type1"
@@ -84,11 +77,6 @@ in
   services.udev.extraRules = ''
     # Let the win11 QEMU process open the physical TPM 2.0 resource manager.
     KERNEL=="tpmrm0", GROUP="qemu", MODE="0660"
-
-    # The physical Windows boot drive is permanently owned by vfio-pci while
-    # NixOS is running. Keep it awake from PCI enumeration onward so its first
-    # guest I/O never races a D3cold or runtime-resume transition.
-    SUBSYSTEM=="pci", KERNEL=="${win11BootNvme}", ATTR{power/control}="on", ATTR{d3cold_allowed}="0"
   '';
 
   # Libvirt domain autostart races the generated XML and passthrough-device
@@ -121,6 +109,7 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [ "libvirtd.service" ];
     requires = [ "libvirtd.service" ];
+    partOf = [ "libvirtd.service" ];
     serviceConfig = {
       Type = "simple";
       Restart = "always";
@@ -235,6 +224,9 @@ in
     };
     script = ''
       export LC_ALL=C
+      RESOLVED_XML="$(${pkgs.coreutils}/bin/mktemp /run/win11-resolved.XXXXXX)"
+      ${pkgs.coreutils}/bin/chmod 0600 "$RESOLVED_XML"
+      trap '${pkgs.coreutils}/bin/rm -f "$RESOLVED_XML"' EXIT
 
       # Both values are required to produce a stable VM identity. Fail cleanly
       # instead of defining a partial domain if secret decryption is unavailable.
@@ -442,211 +434,36 @@ EOF
       # Resolve the generated identity, firmware, and feature fragments.
       ${pkgs.envsubst}/bin/envsubst \
         '$UUID $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $OVMF_CODE $OVMF_VARS $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
-        < ${./win11-template.xml} > /tmp/win11-resolved.xml
+        < ${./win11-template.xml} > "$RESOLVED_XML"
 
-      if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' /tmp/win11-resolved.xml; then
-        echo "Unresolved placeholders remain in /tmp/win11-resolved.xml"
-        ${pkgs.gnugrep}/bin/grep '\$[A-Z_]' /tmp/win11-resolved.xml
+      if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' "$RESOLVED_XML"; then
+        echo "Unresolved placeholders remain in generated win11 XML."
+        ${pkgs.gnugrep}/bin/grep '\$[A-Z_]' "$RESOLVED_XML"
         exit 1
       fi
 
-      ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" /tmp/win11-resolved.xml
+      ${pkgs.gnugrep}/bin/grep -q "timer name='tsc'.*mode='native'" "$RESOLVED_XML"
 
-      ${pkgs.libvirt}/bin/virsh define /tmp/win11-resolved.xml
+      ${pkgs.libvirt}/bin/virsh define "$RESOLVED_XML"
       ${pkgs.libvirt}/bin/virsh autostart --disable win11 >/dev/null 2>&1 || true
-      rm /tmp/win11-resolved.xml
     '';
   };
 
   systemd.services.start-win11-vm = {
     description = "Start Windows 11 VFIO VM";
     wantedBy = [ "multi-user.target" ];
-    before = [ "docker.service" ];
-    after = [
-      "libvirtd.service"
-      "define-win11-vm.service"
-    ];
     wants = [ "win11-power-sync-monitor.service" ];
-    requires = [
-      "libvirtd.service"
+    after = [
       "define-win11-vm.service"
+      "win11-power-sync-monitor.service"
     ];
+    requires = [ "define-win11-vm.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      TimeoutStartSec = "3min";
     };
     script = ''
       export LC_ALL=C
-      REQUIRED_HUGEPAGES_1G=16
-      REQUIRED_STABLE_SAMPLES=5
-      BOOT_NVME=${win11BootNvme}
-
-      wait_for_stable_preflight() {
-        STABLE_SAMPLES=0
-        TPM_READY=0
-
-        for ATTEMPT in $(${pkgs.coreutils}/bin/seq 1 60); do
-          MISSING=""
-          BOOT_NVME_PATH="/sys/bus/pci/devices/$BOOT_NVME"
-
-          # Linux initializes the physical boot NVMe before libvirt detaches it
-          # into VFIO. Keep it fully powered so OVMF and winload.efi receive an
-          # already-proven controller instead of performing its first cold
-          # initialization.
-          if [ -w "$BOOT_NVME_PATH/power/control" ]; then
-            ${pkgs.coreutils}/bin/echo on > "$BOOT_NVME_PATH/power/control"
-          fi
-          if [ -w "$BOOT_NVME_PATH/d3cold_allowed" ]; then
-            ${pkgs.coreutils}/bin/echo 0 > "$BOOT_NVME_PATH/d3cold_allowed"
-          fi
-
-          if [ ! -e /dev/vfio/vfio ]; then
-            MISSING="$MISSING /dev/vfio/vfio"
-          fi
-          if [ ! -e /dev/tpmrm0 ]; then
-            MISSING="$MISSING /dev/tpmrm0"
-            TPM_READY=0
-          elif [ "$TPM_READY" -eq 0 ]; then
-            if ${pkgs.tpm2-tools}/bin/tpm2_getcap properties-fixed >/dev/null 2>&1; then
-              TPM_READY=1
-            else
-              MISSING="$MISSING tpm-not-ready"
-            fi
-          fi
-          for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
-            if [ ! -e "/sys/bus/pci/devices/$DEVICE" ]; then
-              MISSING="$MISSING $DEVICE"
-              continue
-            fi
-
-            PCI_VENDOR="$(${pkgs.pciutils}/bin/setpci -s "$DEVICE" VENDOR_ID 2>/dev/null || true)"
-            if [ -z "$PCI_VENDOR" ] || [ "$PCI_VENDOR" = "ffff" ] || [ "$PCI_VENDOR" = "0000" ]; then
-              MISSING="$MISSING $DEVICE-config-space-unresponsive"
-            fi
-          done
-
-          if [ -r "$BOOT_NVME_PATH/power/control" ]; then
-            BOOT_NVME_POWER_CONTROL="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/control")"
-            if [ "$BOOT_NVME_POWER_CONTROL" != "on" ]; then
-              MISSING="$MISSING $BOOT_NVME-runtime-pm-$BOOT_NVME_POWER_CONTROL"
-            fi
-          fi
-          if [ -r "$BOOT_NVME_PATH/power/runtime_status" ]; then
-            BOOT_NVME_RUNTIME_STATUS="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/runtime_status")"
-            case "$BOOT_NVME_RUNTIME_STATUS" in
-              active|unsupported)
-                ;;
-              *)
-                MISSING="$MISSING $BOOT_NVME-runtime-$BOOT_NVME_RUNTIME_STATUS"
-                ;;
-            esac
-          fi
-          if [ -r "$BOOT_NVME_PATH/power_state" ]; then
-            BOOT_NVME_POWER_STATE="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power_state")"
-            if [ "$BOOT_NVME_POWER_STATE" != "D0" ]; then
-              MISSING="$MISSING $BOOT_NVME-power-$BOOT_NVME_POWER_STATE"
-            fi
-          fi
-          if [ -r "$BOOT_NVME_PATH/d3cold_allowed" ]; then
-            BOOT_NVME_D3COLD_ALLOWED="$(${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed")"
-            if [ "$BOOT_NVME_D3COLD_ALLOWED" != "0" ]; then
-              MISSING="$MISSING $BOOT_NVME-d3cold-allowed"
-            fi
-          fi
-
-          BOOT_NVME_DRIVER="$(${pkgs.coreutils}/bin/readlink -f "$BOOT_NVME_PATH/driver" 2>/dev/null || true)"
-          if [ "$BOOT_NVME_DRIVER" != "/sys/bus/pci/drivers/nvme" ]; then
-            MISSING="$MISSING $BOOT_NVME-not-initialized-by-host-nvme"
-          else
-            BOOT_NVME_CONTROLLERS=0
-            for CONTROLLER in "$BOOT_NVME_PATH"/nvme/nvme*; do
-              if [ ! -e "$CONTROLLER/state" ]; then
-                continue
-              fi
-
-              BOOT_NVME_CONTROLLERS="$((BOOT_NVME_CONTROLLERS + 1))"
-              BOOT_NVME_CONTROLLER_STATE="$(${pkgs.coreutils}/bin/cat "$CONTROLLER/state")"
-              if [ "$BOOT_NVME_CONTROLLER_STATE" != "live" ]; then
-                MISSING="$MISSING $BOOT_NVME-controller-$BOOT_NVME_CONTROLLER_STATE"
-              fi
-            done
-            if [ "$BOOT_NVME_CONTROLLERS" -eq 0 ]; then
-              MISSING="$MISSING $BOOT_NVME-no-host-controller"
-            fi
-
-            BOOT_NVME_NAMESPACES=0
-            for NAMESPACE_PATH in "$BOOT_NVME_PATH"/nvme/nvme*/nvme*n*; do
-              if [ ! -e "$NAMESPACE_PATH/dev" ]; then
-                continue
-              fi
-
-              BOOT_NVME_NAMESPACES="$((BOOT_NVME_NAMESPACES + 1))"
-              NAMESPACE="/dev/$(${pkgs.coreutils}/bin/basename "$NAMESPACE_PATH")"
-              if ! ${pkgs.coreutils}/bin/dd if="$NAMESPACE" of=/dev/null bs=4096 count=1 iflag=direct status=none; then
-                MISSING="$MISSING $NAMESPACE-direct-read-failed"
-              fi
-
-              for BLOCK_DEVICE in $(${pkgs.util-linux}/bin/lsblk -nrpo NAME "$NAMESPACE" 2>/dev/null || true); do
-                BLOCK_NAME="$(${pkgs.coreutils}/bin/basename "$BLOCK_DEVICE")"
-
-                if ${pkgs.util-linux}/bin/lsblk -nrpo MOUNTPOINTS "$BLOCK_DEVICE" 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q '[^[:space:]]'; then
-                  MISSING="$MISSING $BLOCK_DEVICE-mounted-on-host"
-                fi
-                if ${pkgs.gnugrep}/bin/grep -q "^$BLOCK_DEVICE[[:space:]]" /proc/swaps; then
-                  MISSING="$MISSING $BLOCK_DEVICE-used-as-swap"
-                fi
-                for HOLDER in "/sys/class/block/$BLOCK_NAME/holders/"*; do
-                  if [ -e "$HOLDER" ]; then
-                    MISSING="$MISSING $BLOCK_DEVICE-has-holder"
-                    break
-                  fi
-                done
-              done
-            done
-
-            if [ "$BOOT_NVME_NAMESPACES" -eq 0 ]; then
-              MISSING="$MISSING $BOOT_NVME-no-host-namespaces"
-            fi
-          fi
-
-          for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
-            DRIVER="$(${pkgs.coreutils}/bin/readlink -f "/sys/bus/pci/devices/$DEVICE/driver" 2>/dev/null || true)"
-            if [ "$DRIVER" != "/sys/bus/pci/drivers/vfio-pci" ]; then
-              MISSING="$MISSING $DEVICE-not-vfio"
-            fi
-          done
-
-          for DEVICE in ${builtins.concatStringsSep " " win11LibvirtManagedDevices}; do
-            DRIVER="$(${pkgs.coreutils}/bin/readlink -f "/sys/bus/pci/devices/$DEVICE/driver" 2>/dev/null || true)"
-            if [ -z "$DRIVER" ]; then
-              MISSING="$MISSING $DEVICE-no-driver"
-            fi
-          done
-
-          FREE_HUGEPAGES="$(${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || ${pkgs.coreutils}/bin/echo 0)"
-          if [ "$FREE_HUGEPAGES" -lt "$REQUIRED_HUGEPAGES_1G" ]; then
-            MISSING="$MISSING hugepages-$FREE_HUGEPAGES-of-$REQUIRED_HUGEPAGES_1G"
-          fi
-
-          if [ -z "$MISSING" ]; then
-            STABLE_SAMPLES="$((STABLE_SAMPLES + 1))"
-            echo "win11 preflight stable sample $STABLE_SAMPLES/$REQUIRED_STABLE_SAMPLES"
-            if [ "$STABLE_SAMPLES" -ge "$REQUIRED_STABLE_SAMPLES" ]; then
-              return
-            fi
-          else
-            STABLE_SAMPLES=0
-            echo "Waiting for stable win11 preflight:$MISSING"
-          fi
-
-          ${pkgs.coreutils}/bin/sleep 1
-        done
-
-        echo "Timed out waiting for a stable win11 preflight:$MISSING" >&2
-        ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo >&2 || true
-        exit 1
-      }
 
       if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_autostart=1' /proc/cmdline || \
          ${pkgs.gnugrep}/bin/grep -qw 'no-win11-autostart' /proc/cmdline; then
@@ -668,26 +485,11 @@ EOF
           ;;
       esac
 
-      # Require the complete passthrough stack and boot-reserved memory to stay
-      # ready before QEMU touches the physical Windows disk. Start once,
-      # normally; never pause, reset, destroy, or automatically retry.
-      wait_for_stable_preflight
-      for CONTROLLER in "/sys/bus/pci/devices/$BOOT_NVME"/nvme/nvme*; do
-        if [ -e "$CONTROLLER" ]; then
-          echo "Boot NVMe initialized by host: model=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/model" 2>/dev/null || true) firmware=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/firmware_rev" 2>/dev/null || true) state=$(${pkgs.coreutils}/bin/cat "$CONTROLLER/state" 2>/dev/null || true)"
-        fi
-      done
-      echo "Starting win11 once after a stable host-side preflight."
+      # Dedicated devices are already bound to vfio-pci. Start the persistent
+      # libvirt domain normally and exactly once.
+      echo "Starting win11."
       if ! ${pkgs.libvirt}/bin/virsh start win11; then
         ${pkgs.coreutils}/bin/tail -n 80 /var/log/libvirt/qemu/win11.log 2>/dev/null >&2 || true
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/sleep 15
-      if ${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q running; then
-        echo "win11 is running; clean guest shutdowns are monitored for seamless host poweroff."
-      else
-        echo "win11 did not remain running after startup." >&2
         exit 1
       fi
     '';
@@ -965,26 +767,6 @@ EOF
         SPEED="$(${pkgs.coreutils}/bin/cat "$DEVICE_PATH/current_link_speed" 2>/dev/null || true)"
         WIDTH="$(${pkgs.coreutils}/bin/cat "$DEVICE_PATH/current_link_width" 2>/dev/null || true)"
         ${pkgs.coreutils}/bin/echo "$SPEED x$WIDTH"
-      done
-      BOOT_NVME_PATH="/sys/bus/pci/devices/${win11BootNvme}"
-      ${pkgs.coreutils}/bin/printf '${win11BootNvme} runtime-control='
-      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/control" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
-      ${pkgs.coreutils}/bin/printf '${win11BootNvme} runtime-status='
-      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/power/runtime_status" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
-      ${pkgs.coreutils}/bin/printf '${win11BootNvme} d3cold-allowed='
-      ${pkgs.coreutils}/bin/cat "$BOOT_NVME_PATH/d3cold_allowed" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
-      ${pkgs.coreutils}/bin/printf '${win11BootNvme} host-driver='
-      ${pkgs.coreutils}/bin/readlink -f "$BOOT_NVME_PATH/driver" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
-      echo "${win11BootNvme} host namespaces:"
-      for CONTROLLER in "$BOOT_NVME_PATH"/nvme/nvme*; do
-        if [ -e "$CONTROLLER" ]; then
-          ${pkgs.coreutils}/bin/printf 'model='
-          ${pkgs.coreutils}/bin/cat "$CONTROLLER/model" 2>/dev/null || true
-          ${pkgs.coreutils}/bin/printf 'firmware='
-          ${pkgs.coreutils}/bin/cat "$CONTROLLER/firmware_rev" 2>/dev/null || true
-          ${pkgs.coreutils}/bin/printf 'state='
-          ${pkgs.coreutils}/bin/cat "$CONTROLLER/state" 2>/dev/null || true
-        fi
       done
       echo "recent PCI/VFIO/NVMe kernel messages:"
       ${pkgs.systemd}/bin/journalctl -b -k --no-pager | ${pkgs.gnugrep}/bin/grep -Ei 'vfio|aer|pcie|nvme|22:00.0|iommu' | ${pkgs.coreutils}/bin/tail -n 120 || true

@@ -60,5 +60,13 @@
     };
   };
 
+  # Do not export an empty directory on the root filesystem when DATA4 is
+  # unavailable. The container services that consume this disk use the same
+  # fail-closed mount dependency.
+  systemd.services.samba-smbd = {
+    after = [ "mnt-data4.mount" ];
+    requires = [ "mnt-data4.mount" ];
+  };
+
   # Samba requires a user password to be set up manually using `smbpasswd -a rishabh`
 }

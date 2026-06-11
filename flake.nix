@@ -7,11 +7,11 @@
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, sops-nix, ... }@inputs:
+  outputs = { nixpkgs, sops-nix, ... }:
   let
     # Overlay to patch QEMU with the vmcall/hypercall quirk fix and the
     # low-risk Windows VFIO identity tweaks used by the win11 domain.
-    qemuPatchedOverlay = final: prev:
+    qemuPatchedOverlay = _final: prev:
     let
       ovmfWin11 = (prev.OVMF.override {
         secureBoot = true;
@@ -130,7 +130,6 @@ EOF
     nixosConfigurations = {
       rishabh-nix = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
         modules = [
           { nixpkgs.overlays = [ qemuPatchedOverlay ]; }
           sops-nix.nixosModules.sops
