@@ -30,10 +30,9 @@ or modify the `rishabh-nix` host.
 - Shape: 4 OCPUs and 24 GiB RAM
 - Boot volume: 200 GB
 
-The Disko configuration destroys and recreates the entire boot disk as GPT,
-with a 1 GiB EFI system partition, 8 GiB encrypted swap, and the remainder
-(roughly 191 GB) as the NixOS root filesystem. It does not touch separately
-attached block volumes.
+The primary install path uses `nixos-infect` from the existing Ubuntu system.
+It replaces Ubuntu on the existing filesystems, but it does not repartition the
+boot volume.
 
 ## DNS
 
@@ -240,17 +239,21 @@ The Tailscale auth key can be revoked after the machine is enrolled. Rotating
 `portainer_oauth_client_secret` requires restarting the Authentik worker so its
 blueprint reapplies, then running `configure-portainer-oauth.service`.
 
-## Install From Ubuntu
+## Install From Ubuntu With nixos-infect
 
-This procedure replaces Ubuntu with NixOS and permanently deletes every file
-and partition on the OCI boot disk. The destructive installation commands are
-run interactively while SSHed into the server. OCI recovery is not part of the
-normal path; keep the OCI web console available only as a last resort.
+This is the intended OCI install path. Run it while SSH'd into Ubuntu; it does
+not require an OCI recovery shell, custom image, netboot, or a new instance.
+
+Reference: <https://github.com/elitak/nixos-infect>
+
+`nixos-infect` is still destructive and its upstream README warns that a failed
+conversion can leave the server inoperable. It removes Ubuntu's root files
+during the final NixOS boot transition, but preserves the existing partition
+layout.
 
 ### 1. Prepare The Mac
 
-The Mac needs SOPS, age, Git, and SSH. It does not need Nix because NixOS is
-installed from the temporary installer running on the server. Check the tools:
+The Mac needs SOPS, age, Git, SSH, and a browser session signed into OCI:
 
 ```bash
 command -v sops age-keygen openssl ssh git
@@ -288,26 +291,25 @@ Every command must print the OCI public IPv4 address.
 
 ### 3. Inspect The Ubuntu Server
 
-Set the public IP once, confirm Ubuntu SSH works, and inspect the boot disk:
+Set the public IP once, confirm Ubuntu SSH works, and inspect the system:
 
 ```bash
 cd /Users/rishabh/Documents/GitHub/nixconf
 export SERVER_IP="REPLACE_WITH_OCI_PUBLIC_IP"
 
 ssh ubuntu@"$SERVER_IP" \
-  'uname -m; lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL; sudo test -d /sys/firmware/efi && echo UEFI'
+  'cat /etc/os-release; uname -m; hostname; findmnt -no SOURCE,FSTYPE /; findmnt -no SOURCE,FSTYPE /boot/efi; lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL; sudo test -d /sys/firmware/efi && echo UEFI'
 ```
 
 Stop unless the output shows:
 
 - `aarch64`
-- Ubuntu mounted from `/dev/sda`
-- `/dev/sda` is the approximately 200 GB boot disk
+- the root filesystem is ext4
+- `/boot/efi` is mounted and is vfat
+- the boot volume is approximately 200 GB
 - `UEFI`
 
-Change `disko.nix` before proceeding if the boot disk is not `/dev/sda`. Do not
-guess: the next step recreates `/dev/sda`'s partition table and erases all
-Ubuntu files on it.
+Verify that you are connected to the correct OCI instance before continuing.
 
 ### 4. Confirm Secrets And Repository State On The Mac
 
@@ -318,7 +320,7 @@ SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt" \
   sops --decrypt hosts/rishabh-vm/secrets.yaml | grep -n 'REPLACE'
 
 git status --short
-git add README.md hosts/rishabh-vm
+git add hosts/rishabh-vm
 git commit -m "add rishabh-vm"
 git push
 ```
@@ -328,126 +330,111 @@ included. The encrypted `secrets.yaml` must be committed and pushed. Never
 commit the private SOPS key. If these files were already committed, skip the
 commit command and just push.
 
-### 5. Kexec From Ubuntu Into The NixOS Installer
+### 5. Prepare Ubuntu
 
-SSH into Ubuntu. Copy the existing Ubuntu user's authorized keys to root so the
-RAM-only installer imports them, then launch the ARM64 kexec installer:
+SSH into Ubuntu and start `tmux` so a Wi-Fi drop does not interrupt the install:
 
 ```bash
 ssh ubuntu@"$SERVER_IP"
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git xz-utils bzip2 dosfstools e2fsprogs tmux
+tmux new -s nixos-infect
+```
 
+If SSH disconnects before rebooting, reconnect and run:
+
+```bash
+ssh ubuntu@"$SERVER_IP"
+tmux attach -t nixos-infect
+```
+
+Inside `tmux`, set the hostname and copy the existing Ubuntu user's authorized
+keys to root. Upstream `nixos-infect` requires a root authorized-key file while
+installing. Final NixOS disables root SSH and uses the `rishabh` account.
+
+```bash
+sudo hostnamectl set-hostname rishabh-vm
 sudo install -d -m0700 /root/.ssh
 sudo install -m0600 "$HOME/.ssh/authorized_keys" /root/.ssh/authorized_keys
 sudo test -s /root/.ssh/authorized_keys
-command -v curl || sudo apt-get update
-command -v curl || sudo apt-get install -y curl ca-certificates
+```
 
+Clone the repository where the infect import expects it:
+
+```bash
+sudo test ! -e /etc/NIXOS
+sudo test ! -e /etc/NIXOS_LUSTRATE
+sudo test ! -e /etc/nixos/configuration.nix
+sudo install -d -m0755 /etc/nixos
+sudo git clone https://github.com/rishabhroyy/nixconf.git /etc/nixos/nixconf
+sudo test -f /etc/nixos/nixconf/hosts/rishabh-vm/infect.nix
+```
+
+Stop and inspect the server rather than continuing if any of the first three
+tests fail; they indicate a previous partial `nixos-infect` attempt.
+
+From a separate Mac terminal, copy the dedicated SOPS age key:
+
+```bash
+scp "$HOME/.config/sops/age/rishabh-vm.txt" \
+  ubuntu@"$SERVER_IP":/tmp/rishabh-vm-sops-age-key.txt
+```
+
+Back in Ubuntu's `tmux` session:
+
+```bash
+sudo install -d -m0700 /var/lib/sops-nix
+sudo install -m0400 /tmp/rishabh-vm-sops-age-key.txt /var/lib/sops-nix/key.txt
+rm /tmp/rishabh-vm-sops-age-key.txt
+sudo test -s /var/lib/sops-nix/key.txt
+```
+
+### 6. Run nixos-infect
+
+Run the conversion with `NO_REBOOT=1`. This lets you preserve the SOPS key
+through the final root-filesystem lustration before rebooting:
+
+```bash
 sudo -i
 set -o pipefail
-curl -fL \
-  https://github.com/nix-community/nixos-images/releases/latest/download/nixos-kexec-installer-noninteractive-aarch64-linux.tar.gz \
-  | tar -xzf- -C /root
-/root/kexec/run
+export NIX_CHANNEL=nixos-26.05
+export NIXOS_IMPORT=/etc/nixos/nixconf/hosts/rishabh-vm/infect.nix
+export newrootfslabel=nixos
+export NO_REBOOT=1
+
+curl -fL https://raw.githubusercontent.com/elitak/nixos-infect/40f62a680bb0e8f2f607d79abfaaecd99d59401c/nixos-infect \
+  -o /root/nixos-infect
+echo '4354bd68773b41da65c0e815202c43c8549713b3ed3ff6381c71fbc0b0a840ab  /root/nixos-infect' |
+  sha256sum --check -
+bash -x /root/nixos-infect 2>&1 | tee /root/nixos-infect.log
 ```
 
-The kexec command waits briefly and then replaces Ubuntu with a NixOS installer
-running entirely in RAM. SSH disconnecting is expected. No disk has been wiped
-yet, and the installer preserves the old SSH host key.
-
-### 6. Reconnect And Transfer The SOPS Key
-
-Wait about a minute, then reconnect from the Mac as root:
+Do not reboot unless that command exits successfully. The installer has now
+labeled root as `nixos`. Label the EFI filesystem to match this flake, verify
+both labels, preserve the SOPS key through lustration, and reboot:
 
 ```bash
-ssh root@"$SERVER_IP"
-```
+ROOT_DEV="$(findmnt -no SOURCE /)"
+ESP_DEV="$(findmnt -no SOURCE /boot/efi)"
+test "$(e2label "$ROOT_DEV")" = nixos
+fatlabel "$ESP_DEV" ESP
+test "$(fatlabel "$ESP_DEV")" = ESP
 
-Keep that installer SSH session open. In a second Mac terminal, transfer the
-dedicated SOPS key into the RAM-only installer:
-
-```bash
-export SERVER_IP="REPLACE_WITH_OCI_PUBLIC_IP"
-scp "$HOME/.config/sops/age/rishabh-vm.txt" \
-  root@"$SERVER_IP":/tmp/rishabh-vm-sops-age-key.txt
-```
-
-Back in the installer SSH session, verify the architecture, disk, network, and
-transferred key before destroying anything:
-
-```bash
-chmod 0400 /tmp/rishabh-vm-sops-age-key.txt
-uname -m
-lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL
-ip address
-ping -c 3 github.com
-test -s /tmp/rishabh-vm-sops-age-key.txt
-```
-
-Stop unless this still shows `aarch64` and the approximately 200 GB boot disk
-as `/dev/sda`.
-
-### 7. Wipe Ubuntu And Install NixOS
-
-Run the destructive phase inside `tmux` so a Mac Wi-Fi drop does not kill the
-installation session. In the root installer SSH session, install the temporary
-tools and start `tmux`:
-
-```bash
-export NIX_CONFIG="experimental-features = nix-command flakes"
-
-nix profile install \
-  github:NixOS/nixpkgs/nixos-26.05#git \
-  github:NixOS/nixpkgs/nixos-26.05#tmux
-
-tmux new -s nixos-install
-```
-
-If SSH disconnects during the install, reconnect and reattach:
-
-```bash
-ssh root@"$SERVER_IP"
-tmux attach -t nixos-install
-```
-
-Inside the `tmux` session, run the commands below. Disko destroys the complete
-`/dev/sda` partition table and mounts the new filesystems below `/mnt`:
-
-```bash
-git clone https://github.com/rishabhroyy/nixconf.git /tmp/nixconf
-
-cd /tmp/nixconf
-nix flake metadata --no-write-lock-file ./hosts/rishabh-vm
-
-nix run github:nix-community/disko/latest -- \
-  --mode destroy,format,mount ./hosts/rishabh-vm/disko.nix
-
-mount | grep ' /mnt'
-lsblk -f
-
-install -Dm0400 /tmp/rishabh-vm-sops-age-key.txt \
-  /mnt/var/lib/sops-nix/key.txt
-
-nixos-install --no-root-passwd --flake ./hosts/rishabh-vm#rishabh-vm
+grep -qxF var/lib/sops-nix/key.txt /etc/NIXOS_LUSTRATE ||
+  echo var/lib/sops-nix/key.txt >> /etc/NIXOS_LUSTRATE
 sync
 reboot
 ```
 
-The `disko` command is the irreversible wipe. Do not run it unless `/dev/sda`
-was positively identified as the intended OCI boot disk. After it runs, verify
-that both the new root and EFI filesystems are mounted below `/mnt`. Do not
-reboot unless `nixos-install` completes successfully. If SSH drops before
-Disko, rebooting should return to Ubuntu. If SSH drops after Disko starts,
-first reconnect as `root` and reattach to `tmux`. If the installer itself is no
-longer reachable after the wipe, Ubuntu is gone; the practical recovery choices
-are the OCI serial console or rebuilding/reinstalling the boot volume.
+After this reboot Ubuntu no longer runs, but NixOS initially moves Ubuntu's old
+root files into `/old-root` as a recovery measure. The existing partition
+layout remains.
 
-### 8. Verify The Fresh NixOS Boot
+### 7. Verify The Fresh NixOS Boot
 
-After `nixos-install` finishes and the VM has rebooted, the Ubuntu account no
-longer exists and the final NixOS SSH host key will have changed. The
-`ssh-keygen -R` command below only removes the old key from the Mac's local
-`known_hosts` file; it does not touch the server and is safe to run even if no
-old entry exists. Then connect with the configured `rishabh` account:
+Wait a few minutes. The final NixOS SSH host key will differ from Ubuntu's.
+`ssh-keygen -R` only removes the old key from the Mac's local `known_hosts`
+file; it never modifies the server.
 
 ```bash
 ssh-keygen -R "$SERVER_IP"
@@ -456,18 +443,26 @@ cat /etc/os-release
 hostname
 lsblk -f
 df -h /
-swapon --show
 sudo systemctl --failed
+sudo tailscale status
+sudo docker ps
+```
+
+Confirm the OS is NixOS, hostname is `rishabh-vm`, `/` is labeled `nixos`, and
+`/boot/efi` is labeled `ESP`. The old `ubuntu` SSH login should fail.
+
+Only after those checks succeed, permanently remove Ubuntu's old files:
+
+```bash
+sudo du -sh /old-root
+sudo rm -rf --one-file-system /old-root
+test ! -e /old-root
 exit
 ```
 
-Confirm the operating system is NixOS, the hostname is `rishabh-vm`, `/` is
-the large ext4 partition on `/dev/sda`, and the encrypted swap is active. If
-SSH does not return, first wait a few minutes and confirm the OCI instance is
-running and TCP 22 is still allowed. The OCI serial console is only a last
-resort; if it is unavailable, the realistic fallback is to reinstall/rebuild
-the boot volume from the start rather than rerunning destructive commands
-blindly.
+If final SSH does not return, wait a few minutes and confirm the OCI instance
+is running and TCP 22 is allowed. A failed `nixos-infect` boot may require OCI
+boot-volume recovery or reinstall; do not rerun destructive commands blindly.
 
 ## First Login
 
@@ -620,12 +615,12 @@ the machine to it. Container and Wings timers independently fetch current
 upstream releases.
 
 This nested flake intentionally has no `flake.lock`. On each automatic upgrade,
-Nix resolves the current revisions of the `nixos-26.05`, Disko, and sops-nix
-inputs, so package details and versions advance without committing anything to
-the repository. The tradeoff is that a build is not perfectly reproducible
-later. Adding a lock file would improve reproducibility, but then a separate
-trusted workflow would need to update, test, commit, and push that lock file
-before the server could consume newer Nix inputs.
+Nix resolves the current revisions of the `nixos-26.05` and sops-nix inputs, so
+package details and versions advance without committing anything to the
+repository. The tradeoff is that a build is not perfectly reproducible later.
+Adding a lock file would improve reproducibility, but then a separate trusted
+workflow would need to update, test, commit, and push that lock file before the
+server could consume newer Nix inputs.
 
 Automatic updates cover NixOS packages, this flake after it is pushed to
 GitHub, application containers, Wings, certificate renewal, service restarts,
@@ -651,11 +646,10 @@ These values were not all stated explicitly and should be reviewed before
 installation:
 
 - The OCI VM has 4 Ampere OCPUs, 24 GiB RAM, and a 200 GB boot volume.
-- The OCI boot disk is `/dev/sda`; verify with `lsblk`.
 - The server timezone should be `America/Los_Angeles`.
 - TCP/UDP `25565-25575` is enough for game allocations.
 - Public key-only SSH on TCP 22 is desired as a recovery path.
-- Eight GiB of swap, 14 days of local database dumps, and the documented
+- No persistent swap, 14 days of local database dumps, and the documented
   maintenance times are acceptable.
 - `auth.rishabhroy.com` and `wings.rishabhroy.com` may be added alongside the
   three subdomains you specified because Authentik and Wings need endpoints.

@@ -3,7 +3,6 @@
 {
   imports = [
     (modulesPath + "/profiles/qemu-guest.nix")
-    ./disko.nix
     ./services.nix
   ];
 
@@ -37,11 +36,24 @@
       efiInstallAsRemovable = true;
       configurationLimit = 10;
     };
+    loader.efi.efiSysMountPoint = "/boot/efi";
     loader.efi.canTouchEfiVariables = false;
     kernel.sysctl = {
       "net.ipv4.ip_forward" = 1;
       "net.ipv6.conf.all.forwarding" = 1;
     };
+  };
+
+  fileSystems."/" = {
+    device = lib.mkForce "/dev/disk/by-label/nixos";
+    fsType = "ext4";
+    options = [ "noatime" ];
+  };
+
+  fileSystems."/boot/efi" = {
+    device = lib.mkForce "/dev/disk/by-label/ESP";
+    fsType = "vfat";
+    options = [ "umask=0077" ];
   };
 
   nix = {
