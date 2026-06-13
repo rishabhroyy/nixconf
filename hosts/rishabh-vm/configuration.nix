@@ -1,8 +1,8 @@
-{ config, lib, pkgs, modulesPath, ... }:
+{ config, lib, pkgs, ... }:
 
 {
   imports = [
-    (modulesPath + "/profiles/qemu-guest.nix")
+    ./hardware-configuration.nix
     ./services.nix
   ];
 
@@ -20,8 +20,8 @@
       allowedTCPPortRanges = [{ from = 25565; to = 25575; }];
       allowedUDPPortRanges = [{ from = 25565; to = 25575; }];
     };
-    # Keep same-host Panel/Wings traffic local instead of depending on OCI
-    # public-IP hairpin behavior.
+    # Keep same-host Panel/Wings traffic local instead of depending on public
+    # IP hairpin behavior.
     hosts."127.0.0.1" = [
       "games.rishabhroy.com"
       "wings.rishabhroy.com"
@@ -29,31 +29,12 @@
   };
 
   boot = {
-    loader.grub = {
-      enable = true;
-      device = "nodev";
-      efiSupport = true;
-      efiInstallAsRemovable = true;
-      configurationLimit = 10;
-    };
-    loader.efi.efiSysMountPoint = "/boot/efi";
-    loader.efi.canTouchEfiVariables = false;
+    loader.systemd-boot.enable = lib.mkDefault true;
+    loader.efi.canTouchEfiVariables = lib.mkDefault true;
     kernel.sysctl = {
       "net.ipv4.ip_forward" = 1;
       "net.ipv6.conf.all.forwarding" = 1;
     };
-  };
-
-  fileSystems."/" = {
-    device = lib.mkForce "/dev/disk/by-label/nixos";
-    fsType = "ext4";
-    options = [ "noatime" ];
-  };
-
-  fileSystems."/boot/efi" = {
-    device = lib.mkForce "/dev/disk/by-label/ESP";
-    fsType = "vfat";
-    options = [ "umask=0077" ];
   };
 
   nix = {

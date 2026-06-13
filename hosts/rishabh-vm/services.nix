@@ -2,6 +2,7 @@
 
 let
   authentikImage = "ghcr.io/goauthentik/server:2026.5";
+  wingsAsset = "wings_linux_amd64";
 
   authentikForwardAuth = ''
     reverse_proxy /outpost.goauthentik.io/* 127.0.0.1:9001
@@ -570,7 +571,7 @@ in
   ];
 
   systemd.services.pterodactyl-wings-update = {
-    description = "Install the latest verified official Pterodactyl Wings ARM64 release";
+    description = "Install the latest verified official Pterodactyl Wings release";
     wantedBy = [ "multi-user.target" ];
     before = [ "pterodactyl-wings.service" ];
     after = [ "network-online.target" ];
@@ -585,8 +586,8 @@ in
       release="$(${pkgs.curl}/bin/curl --fail --silent --show-error --location --retry 5 \
         -H 'Accept: application/vnd.github+json' \
         https://api.github.com/repos/pterodactyl/wings/releases/latest)"
-      url="$(printf '%s' "$release" | ${pkgs.jq}/bin/jq -er '.assets[] | select(.name == "wings_linux_arm64") | .browser_download_url')"
-      digest="$(printf '%s' "$release" | ${pkgs.jq}/bin/jq -er '.assets[] | select(.name == "wings_linux_arm64") | .digest | sub("^sha256:"; "")')"
+      url="$(printf '%s' "$release" | ${pkgs.jq}/bin/jq -er '.assets[] | select(.name == "${wingsAsset}") | .browser_download_url')"
+      digest="$(printf '%s' "$release" | ${pkgs.jq}/bin/jq -er '.assets[] | select(.name == "${wingsAsset}") | .digest | sub("^sha256:"; "")')"
 
       ${pkgs.curl}/bin/curl --fail --location --retry 5 --output "$temporary" "$url"
       printf '%s  %s\n' "$digest" "$temporary" | ${pkgs.coreutils}/bin/sha256sum --check -
