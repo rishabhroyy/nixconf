@@ -1,42 +1,53 @@
 # rishabh-vm
 
-Separate NixOS flake for the Oracle Cloud Ampere ARM server. It does not import
-or modify the `rishabh-nix` host.
+Reusable x86_64 NixOS server configuration for Rishabh's self-hosted service
+stack. This flake is intentionally separate from the `rishabh-nix` desktop
+host.
 
-## Architecture
+It preserves the existing identity and application configuration:
 
-- Native Caddy owns public HTTPS and automatic Let's Encrypt renewal.
-- Port 80 stays closed. Caddy can renew with TLS-ALPN-01 over port 443.
-- Docker app ports bind only to `127.0.0.1`.
-- Authentik declaratively protects every human-facing application.
-- Authentik follows its current PostgreSQL-only deployment layout and persists
-  its shared application state under `/var/lib/authentik/data`.
-- Copyparty consumes Authentik identity headers directly and permits anonymous
-  access only to explicitly created `/share/...` links.
-- Portainer CE uses its native OAuth support with Authentik.
-- Pyrodactyl uses a small checked-in Authentik SSO middleware because upstream
-  Pyrodactyl does not currently provide native OAuth/OIDC.
-- Wings is deliberately not placed behind interactive SSO: Panel, browser
-  consoles, and file transfers authenticate to it using Pterodactyl-compatible
-  tokens.
-- Wings runs natively because it manages game containers through Docker.
-- NixOS 26.05 stable upgrades daily; a systemd timer pulls container images
-  daily and only restarts services whose images changed; Wings updates daily
-  from Pterodactyl's verified official ARM64 release.
+- hostname and Tailscale name: `rishabh-vm`
+- domains under `rishabhroy.com`
+- SSH keys in `keys/`
+- dedicated SOPS recipient in `.sops.yaml`
+- encrypted `secrets.yaml`
+- Authentik, Portainer, Copyparty, Pyrodactyl, and Wings configuration
 
-## Confirmed OCI Hardware
+It is provider-neutral and does not assume a particular disk size.
 
-- Architecture: ARM64 Ampere
-- Shape: 4 OCPUs and 24 GiB RAM
-- Boot volume: 200 GB
+## Services
 
-The primary install path uses `nixos-infect` from the existing Ubuntu system.
-It replaces Ubuntu on the existing filesystems, but it does not repartition the
-boot volume.
+- Caddy provides public HTTPS and automatic certificate renewal over port 443.
+- Authentik provides SSO for every human-facing web application.
+- Portainer CE uses native OAuth with Authentik.
+- Copyparty consumes Authentik identity headers and allows anonymous access
+  only through explicitly created share links.
+- Pyrodactyl uses the checked-in Authentik middleware.
+- Wings runs natively and manages game-server containers through Docker.
+- Tailscale advertises the server as an exit node.
+- NixOS, containers, and Wings update automatically on schedules.
+
+## Hardware Baseline
+
+The flake targets `x86_64-linux` and expects UEFI.
+
+The checked-in `hardware-configuration.nix` is a portable starter using:
+
+- an ext4 root filesystem labeled `nixos`
+- a vfat EFI system partition labeled `ESP`, mounted at `/boot`
+- common SATA, NVMe, USB, and VirtIO initrd modules
+
+The main configuration enables systemd-boot for the default UEFI target.
+Before deploying, replace `hardware-configuration.nix` with the target
+machine's generated hardware configuration. This is the only file intended to
+contain machine-specific filesystem and kernel-module details.
+
+Recommended resources depend heavily on game-server workloads. Start with at
+least 4 CPU cores, 16 GiB RAM, and 150 GB storage.
 
 ## DNS
 
-Point these A records at the OCI public IPv4 address:
+Point these A records at the server's public IPv4 address:
 
 - `auth.rishabhroy.com`
 - `cloud.rishabhroy.com`
@@ -44,42 +55,36 @@ Point these A records at the OCI public IPv4 address:
 - `games.rishabhroy.com`
 - `wings.rishabhroy.com`
 
-Remove any AAAA records unless the VM has working public IPv6.
+Remove AAAA records unless the server has working public IPv6. If using
+Cloudflare DNS, keep the records **DNS only**. Port 80 remains closed; Caddy
+uses TLS-ALPN-01 over port 443.
 
-If DNS is hosted by Cloudflare, keep these records **DNS only** rather than
-proxied. Port 80 is closed, so Caddy obtains and renews certificates with the
-TLS-ALPN-01 challenge directly over port 443.
+## Firewall
 
-## OCI Network Security List
+The NixOS firewall permits only:
 
-The NixOS firewall is authoritative. Mirror it in OCI:
+- TCP 22 for key-only SSH
+- TCP 443 for HTTPS
+- TCP 2022 for Wings SFTP
+- UDP 41641 for direct Tailscale connections
+- TCP and UDP 25565-25575 for game allocations
 
-- TCP 22 from your home IP if practical, otherwise from anywhere
-- TCP 443 from anywhere
-- TCP 2022 from anywhere for Pterodactyl's authenticated SFTP service
-- UDP 41641 from anywhere for direct Tailscale connections
-- TCP and UDP 25565-25575 from anywhere for game allocations
-- No rule for TCP 80
-- No rules for 8080, 9000, 9001, or 3923
+Mirror those rules in any provider, router, or upstream firewall. Keep outbound
+access available for Nix caches, GitHub, container registries, Tailscale, and
+certificate authorities.
 
-Adjust the game allocation range in `configuration.nix` and OCI together when
-needed.
+Adjust the game allocation range in both `configuration.nix` and
+`services.nix` if needed.
 
-Keep OCI egress open so the server can reach GitHub, container registries,
-Tailscale, Nix caches, and certificate authorities.
+## Dedicated SOPS Key
 
-## Create The Dedicated SOPS Key
-
-The dedicated private key is stored outside the repository on the Mac:
+The dedicated private age key remains outside the repository:
 
 ```text
 ~/.config/sops/age/rishabh-vm.txt
 ```
 
-Its public recipient is in `.sops.yaml`. It is intentionally separate from
-the desktop key in `~/.config/sops/age/keys.txt`.
-
-Verify that the private key matches `.sops.yaml`:
+Verify it matches the recipient in `.sops.yaml`:
 
 ```bash
 age-keygen -y ~/.config/sops/age/rishabh-vm.txt
@@ -92,353 +97,103 @@ Both commands must print:
 age1zhy9xragqd6hmkszt6aeqaeex6qfg4ee7m9r2880sc4aqzx58cvs02ndnp
 ```
 
-To edit the encrypted secrets file:
+Edit the encrypted secrets file with:
 
 ```bash
 cd hosts/rishabh-vm
 SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt" sops secrets.yaml
 ```
 
-Back up `~/.config/sops/age/rishabh-vm.txt` to an encrypted password manager,
-encrypted backup disk, or another secure location. Losing both the Mac and this
-key means losing the ability to decrypt `secrets.yaml`.
+Back up the private key separately. During installation, place it on the target
+at `/var/lib/sops-nix/key.txt`, owned by root with mode `0400`.
 
-To rotate this dedicated key later, generate a new key outside the repository,
-replace the recipient in `.sops.yaml`, and run `sops updatekeys secrets.yaml`:
+## Secrets
 
-```bash
-age-keygen -o ~/.config/sops/age/rishabh-vm-new.txt
-age-keygen -y ~/.config/sops/age/rishabh-vm-new.txt
-```
+The encrypted `secrets.yaml` contains:
 
-During installation, copy the dedicated key to `/var/lib/sops-nix/key.txt` on
-the target. The target copy must be owned by root with mode `0400`.
+- Tailscale enrollment key
+- Pyrodactyl database credentials and Laravel application key
+- generated Wings configuration
+- Authentik database, secret, and bootstrap credentials
+- Portainer bootstrap password and OAuth secret
+- Pyrodactyl SSO middleware secret
 
-## Fill Every Secret
+Existing cryptographic identities and database passwords may be retained for a
+future deployment. Do not rotate database passwords, application keys, or
+Authentik's secret merely by editing SOPS after services contain persistent
+data; those require coordinated service-specific rotation.
 
-Start in the VM flake directory and open the encrypted file:
+Before a new deployment, decrypt the file and inspect placeholders:
 
 ```bash
 cd hosts/rishabh-vm
-export SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt"
-sops secrets.yaml
+SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt" \
+  sops --decrypt secrets.yaml | grep -n REPLACE
 ```
 
-Put the following values into the matching YAML fields. Generate each password
-independently; do not reuse values.
+The Wings placeholder is expected until a Pyrodactyl node exists. Generate a
+fresh Tailscale auth key if the stored enrollment key has expired or was
+revoked.
 
-### Locally Generated Secrets
+No outbound email is configured. Authentik's initial account is `akadmin` with
+the non-routable address `akadmin@rishabh-vm.invalid`. Create users manually;
+public signup and email password resets are unavailable.
 
-Generate and save Portainer's bootstrap password. The server generates the
-bcrypt hash at runtime and uses the plaintext once to enable native OAuth:
+## Prepare For New Hardware
 
-```bash
-openssl rand -hex 32  # portainer_admin_password
-```
+From a NixOS installer on the future x86_64 target:
 
-Generate separate database passwords:
+1. Partition and format the target using your preferred installer workflow.
+2. Label the ext4 root filesystem `nixos`.
+3. Label the vfat EFI system partition `ESP` and mount it at `/mnt/boot`.
+4. Mount root at `/mnt`.
+5. Generate hardware configuration:
 
-```bash
-openssl rand -hex 32  # pterodactyl_db_password
-openssl rand -hex 32  # pterodactyl_db_root_password
-openssl rand -hex 32  # authentik_postgres_password
-openssl rand -hex 48  # portainer_oauth_client_secret
-openssl rand -hex 48  # pyrodactyl_sso_secret
-```
-
-Generate the Pyrodactyl Laravel application key:
-
-```bash
-printf 'base64:%s\n' "$(openssl rand -base64 32 | tr -d '\n')"
-```
-
-Put the complete single output line beginning with `base64:` in
-`pterodactyl_app_key`.
-
-Generate Authentik's secret key and bootstrap password:
-
-```bash
-openssl rand -hex 48  # authentik_secret_key
-openssl rand -hex 32  # authentik_bootstrap_password
-```
-
-Authentik's initial username is `akadmin`. Save the plaintext
-`authentik_bootstrap_password` in your password manager.
-
-No real email address is required. The bootstrap account receives the
-non-routable identity `akadmin@rishabh-vm.invalid`. Authentik and Pyrodactyl
-are not configured to send outbound email, public signup is not configured,
-and password-reset emails will not work. Create users yourself in Authentik
-and use the documented administrator recovery path when needed.
-
-### Tailscale Auth Key
-
-The recommended path is a tagged server because tagged-device key expiry is
-disabled by default:
-
-1. Open <https://login.tailscale.com/admin/acls/file>.
-2. Add a `tagOwners` entry if `tag:server` does not already exist:
-
-   ```json
-   "tagOwners": {
-     "tag:server": ["autogroup:admin"]
-   }
+   ```bash
+   sudo nixos-generate-config --root /mnt
    ```
 
-3. Save the policy, then open <https://login.tailscale.com/admin/settings/keys>.
-4. Select **Generate auth key**.
-5. Give it a description such as `rishabh-vm provisioning`.
-6. Enable **Pre-approved** and `tag:server`. Do not enable **Ephemeral**.
-7. A one-off key is sufficient for this single install. Enable **Reusable**
-   only if you intentionally want the same key to recover/re-enroll the server.
-8. Generate the key and put the full `tskey-auth-...` value in
-   `tailscale_auth_key`.
+6. Review `/mnt/etc/nixos/hardware-configuration.nix`.
+7. Replace this repository's `hosts/rishabh-vm/hardware-configuration.nix`
+   with the reviewed generated file.
+8. Ensure the generated file and `configuration.nix` do not define conflicting
+   bootloaders or filesystems.
+9. Commit and push the hardware change before installation so automatic
+   upgrades can fetch the same configuration later.
 
-Alternative without tags: generate a pre-approved, non-ephemeral auth key,
-install the VM, then open the Machines page and manually select **Disable key
-expiry** for `rishabh-vm`.
+For non-UEFI systems, replace the systemd-boot settings in `configuration.nix`.
+For unusual storage, encryption, RAID, ZFS, or provider images, configure the
+filesystems and required modules appropriately in `hardware-configuration.nix`.
 
-The auth key itself expires in at most 90 days, but the enrolled tagged
-device's node-key expiry is disabled by default. After installation, open the
-Tailscale Machines page, approve `rishabh-vm` as an exit node, and verify that
-device key expiry is disabled. You may then revoke the reusable auth key; the
-already-enrolled machine remains authorized.
+## Install NixOS
 
-### Pyrodactyl Wings Config
-
-Leave `pterodactyl_wings_config` at its placeholder during initial installation.
-It can only be obtained after the Panel is running and a node has been created.
-The first-login section below explains how to retrieve and save it.
-
-### Save And Verify
-
-Save and exit the SOPS editor. Confirm that no ordinary secret placeholder
-remains. The Wings placeholder is expected until after the first installation:
+From the mounted NixOS installer environment:
 
 ```bash
-SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt" \
-  sops --decrypt secrets.yaml | grep -n 'REPLACE'
+export NIX_CONFIG="experimental-features = nix-command flakes"
+
+sudo install -Dm0400 /path/to/rishabh-vm.txt \
+  /mnt/var/lib/sops-nix/key.txt
+
+sudo nixos-install --no-root-passwd \
+  --flake 'github:rishabhroyy/nixconf?dir=hosts/rishabh-vm#rishabh-vm'
 ```
 
-Before installation, the only expected output is the Wings configuration
-placeholder. After configuring Wings, this command should produce no output.
-
-DNS records and the OCI public IP address are intentionally not SOPS fields.
-
-### Secret Lifecycle
-
-Several values are initialization credentials or cryptographic identities, not
-ordinary passwords that can be rotated by editing SOPS alone. After first boot,
-do not change the database passwords, `pterodactyl_app_key`,
-`authentik_secret_key`, `authentik_bootstrap_password`, or
-`portainer_admin_password` without a coordinated service-specific rotation or
-recovery procedure. Changing only the encrypted file can make an existing
-database or application inaccessible.
-
-The Tailscale auth key can be revoked after the machine is enrolled. Rotating
-`portainer_oauth_client_secret` requires restarting the Authentik worker so its
-blueprint reapplies, then running `configure-portainer-oauth.service`.
-
-## Install From Ubuntu With nixos-infect
-
-This is the intended OCI install path. Run it while SSH'd into Ubuntu; it does
-not require an OCI recovery shell, custom image, netboot, or a new instance.
-
-Reference: <https://github.com/elitak/nixos-infect>
-
-`nixos-infect` is still destructive and its upstream README warns that a failed
-conversion can leave the server inoperable. It removes Ubuntu's root files
-during the final NixOS boot transition, but preserves the existing partition
-layout.
-
-### 1. Prepare The Mac
-
-The Mac needs SOPS, age, Git, SSH, and a browser session signed into OCI:
+Do not reboot unless installation completes successfully. After reboot, remove
+the previous SSH host key from the client and connect as `rishabh`:
 
 ```bash
-command -v sops age-keygen openssl ssh git
+ssh-keygen -R "SERVER_IP_OR_HOSTNAME"
+ssh rishabh@"SERVER_IP_OR_HOSTNAME"
 ```
 
-Install any missing SOPS or age tools with Homebrew:
+`ssh-keygen -R` only modifies the client's local `known_hosts` file.
+
+## First Boot
+
+Verify the base system:
 
 ```bash
-brew install sops age
-```
-
-### 2. Finish External Setup
-
-Before wiping Ubuntu:
-
-1. Create all five DNS A records listed above and wait for them to resolve.
-2. Apply the OCI ingress and egress rules listed above.
-3. Fill every pre-install secret; only the Wings placeholder may remain.
-4. Verify the dedicated SOPS key and back it up outside this repository.
-5. Commit and push `hosts/rishabh-vm` so automatic upgrades can fetch it later.
-
-The repository is public, so neither the Mac nor server needs to be logged
-into GitHub.
-
-Verify the public DNS records from the Mac:
-
-```bash
-for host in auth cloud docker games wings; do
-  printf '%s: ' "$host"
-  dig +short A "$host.rishabhroy.com"
-done
-```
-
-Every command must print the OCI public IPv4 address.
-
-### 3. Inspect The Ubuntu Server
-
-Set the public IP once, confirm Ubuntu SSH works, and inspect the system:
-
-```bash
-cd /Users/rishabh/Documents/GitHub/nixconf
-export SERVER_IP="REPLACE_WITH_OCI_PUBLIC_IP"
-
-ssh ubuntu@"$SERVER_IP" \
-  'cat /etc/os-release; uname -m; hostname; findmnt -no SOURCE,FSTYPE /; findmnt -no SOURCE,FSTYPE /boot/efi; lsblk -o NAME,SIZE,TYPE,MOUNTPOINTS,MODEL; sudo test -d /sys/firmware/efi && echo UEFI'
-```
-
-Stop unless the output shows:
-
-- `aarch64`
-- the root filesystem is ext4
-- `/boot/efi` is mounted and is vfat
-- the boot volume is approximately 200 GB
-- `UEFI`
-
-Verify that you are connected to the correct OCI instance before continuing.
-
-### 4. Confirm Secrets And Repository State On The Mac
-
-The Wings placeholder is expected before first boot; no other placeholder is:
-
-```bash
-SOPS_AGE_KEY_FILE="$HOME/.config/sops/age/rishabh-vm.txt" \
-  sops --decrypt hosts/rishabh-vm/secrets.yaml | grep -n 'REPLACE'
-
-git status --short
-git add hosts/rishabh-vm
-git commit -m "add rishabh-vm"
-git push
-```
-
-Review `git status` before staging and ensure only the intended VM files are
-included. The encrypted `secrets.yaml` must be committed and pushed. Never
-commit the private SOPS key. If these files were already committed, skip the
-commit command and just push.
-
-### 5. Prepare Ubuntu
-
-SSH into Ubuntu and start `tmux` so a Wi-Fi drop does not interrupt the install:
-
-```bash
-ssh ubuntu@"$SERVER_IP"
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git xz-utils bzip2 dosfstools e2fsprogs tmux
-tmux new -s nixos-infect
-```
-
-If SSH disconnects before rebooting, reconnect and run:
-
-```bash
-ssh ubuntu@"$SERVER_IP"
-tmux attach -t nixos-infect
-```
-
-Inside `tmux`, set the hostname and copy the existing Ubuntu user's authorized
-keys to root. Upstream `nixos-infect` requires a root authorized-key file while
-installing. Final NixOS disables root SSH and uses the `rishabh` account.
-
-```bash
-sudo hostnamectl set-hostname rishabh-vm
-sudo install -d -m0700 /root/.ssh
-sudo install -m0600 "$HOME/.ssh/authorized_keys" /root/.ssh/authorized_keys
-sudo test -s /root/.ssh/authorized_keys
-```
-
-Clone the repository where the infect import expects it:
-
-```bash
-sudo test ! -e /etc/NIXOS
-sudo test ! -e /etc/NIXOS_LUSTRATE
-sudo test ! -e /etc/nixos/configuration.nix
-sudo install -d -m0755 /etc/nixos
-sudo git clone https://github.com/rishabhroyy/nixconf.git /etc/nixos/nixconf
-sudo test -f /etc/nixos/nixconf/hosts/rishabh-vm/infect.nix
-```
-
-Stop and inspect the server rather than continuing if any of the first three
-tests fail; they indicate a previous partial `nixos-infect` attempt.
-
-From a separate Mac terminal, copy the dedicated SOPS age key:
-
-```bash
-scp "$HOME/.config/sops/age/rishabh-vm.txt" \
-  ubuntu@"$SERVER_IP":/tmp/rishabh-vm-sops-age-key.txt
-```
-
-Back in Ubuntu's `tmux` session:
-
-```bash
-sudo install -d -m0700 /var/lib/sops-nix
-sudo install -m0400 /tmp/rishabh-vm-sops-age-key.txt /var/lib/sops-nix/key.txt
-rm /tmp/rishabh-vm-sops-age-key.txt
-sudo test -s /var/lib/sops-nix/key.txt
-```
-
-### 6. Run nixos-infect
-
-Run the conversion with `NO_REBOOT=1`. This lets you preserve the SOPS key
-through the final root-filesystem lustration before rebooting:
-
-```bash
-sudo -i
-set -o pipefail
-export NIX_CHANNEL=nixos-26.05
-export NIXOS_IMPORT=/etc/nixos/nixconf/hosts/rishabh-vm/infect.nix
-export newrootfslabel=nixos
-export NO_REBOOT=1
-
-curl -fL https://raw.githubusercontent.com/elitak/nixos-infect/40f62a680bb0e8f2f607d79abfaaecd99d59401c/nixos-infect \
-  -o /root/nixos-infect
-echo '4354bd68773b41da65c0e815202c43c8549713b3ed3ff6381c71fbc0b0a840ab  /root/nixos-infect' |
-  sha256sum --check -
-bash -x /root/nixos-infect 2>&1 | tee /root/nixos-infect.log
-```
-
-Do not reboot unless that command exits successfully. The installer has now
-labeled root as `nixos`. Label the EFI filesystem to match this flake, verify
-both labels, preserve the SOPS key through lustration, and reboot:
-
-```bash
-ROOT_DEV="$(findmnt -no SOURCE /)"
-ESP_DEV="$(findmnt -no SOURCE /boot/efi)"
-test "$(e2label "$ROOT_DEV")" = nixos
-fatlabel "$ESP_DEV" ESP
-test "$(fatlabel "$ESP_DEV")" = ESP
-
-grep -qxF var/lib/sops-nix/key.txt /etc/NIXOS_LUSTRATE ||
-  echo var/lib/sops-nix/key.txt >> /etc/NIXOS_LUSTRATE
-sync
-reboot
-```
-
-After this reboot Ubuntu no longer runs, but NixOS initially moves Ubuntu's old
-root files into `/old-root` as a recovery measure. The existing partition
-layout remains.
-
-### 7. Verify The Fresh NixOS Boot
-
-Wait a few minutes. The final NixOS SSH host key will differ from Ubuntu's.
-`ssh-keygen -R` only removes the old key from the Mac's local `known_hosts`
-file; it never modifies the server.
-
-```bash
-ssh-keygen -R "$SERVER_IP"
-ssh rishabh@"$SERVER_IP"
 cat /etc/os-release
 hostname
 lsblk -f
@@ -446,95 +201,43 @@ df -h /
 sudo systemctl --failed
 sudo tailscale status
 sudo docker ps
+sudo systemctl list-timers
 ```
 
-Confirm the OS is NixOS, hostname is `rishabh-vm`, `/` is labeled `nixos`, and
-`/boot/efi` is labeled `ESP`. The old `ubuntu` SSH login should fail.
+In Tailscale, approve `rishabh-vm` as an exit node and confirm device key expiry
+is disabled.
 
-Only after those checks succeed, permanently remove Ubuntu's old files:
+Open `https://auth.rishabhroy.com` and sign in as `akadmin` using the Authentik
+bootstrap password. Enroll MFA and create a second administrator identity.
 
-```bash
-sudo du -sh /old-root
-sudo rm -rf --one-file-system /old-root
-test ! -e /old-root
-exit
-```
+The checked-in Authentik blueprint creates the Portainer OAuth provider and the
+Copyparty/Pyrodactyl proxy providers. Open each application once while signed
+into Authentik:
 
-If final SSH does not return, wait a few minutes and confirm the OCI instance
-is running and TCP 22 is allowed. A failed `nixos-infect` boot may require OCI
-boot-volume recovery or reinstall; do not rerun destructive commands blindly.
+- `https://docker.rishabhroy.com`
+- `https://cloud.rishabhroy.com`
+- `https://games.rishabhroy.com`
 
-## First Login
+Portainer creates OAuth users as standard users; a timer promotes only
+`akadmin` to administrator. Pyrodactyl automatically provisions users after
+Authentik succeeds.
 
-```bash
-export SERVER_IP="REPLACE_WITH_OCI_PUBLIC_IP"
-ssh rishabh@"$SERVER_IP"
-sudo systemctl --failed
-sudo tailscale status
-sudo docker ps
-```
+## Configure Wings
 
-Open `https://auth.rishabhroy.com` and log in as `akadmin` using the Authentik
-bootstrap password. The checked-in Authentik blueprint automatically creates
-the Portainer OAuth provider plus the Copyparty and Pyrodactyl proxy providers,
-applications, and embedded-outpost assignments. Confirm all three applications
-appear under **Applications**. No manual provider wiring is required.
-
-Enroll a WebAuthn security key or TOTP authenticator for `akadmin`, and create a
-second Authentik administrator account as a recovery identity. Authentik is the
-gate for every human-facing application, so protecting and retaining access to
-it is essential.
-
-### Create Users Without Email
-
-Authentik does not need to send signup or verification email in this setup.
-There is no public signup flow. Create each account yourself under **Directory
-> Users**, set its password, and give it a unique email-shaped identity such as
-`alice@rishabh-vm.invalid`. The reserved `.invalid` domain cannot receive mail;
-the value exists only because Pyrodactyl requires a unique valid-looking email
-when its SSO middleware creates the matching panel user.
-
-Users sign in with the credentials you set and should enroll MFA. Authentik
-administrators can reset a user's password directly or create a recovery link
-without configuring SMTP. Portainer identifies users by username, and
-Pyrodactyl automatically provisions them on their first visit.
-
-Open `https://games.rishabhroy.com` while signed into Authentik. The SSO
-middleware automatically creates the matching Pyrodactyl user. The Authentik
-bootstrap user `akadmin` becomes the initial Pyrodactyl administrator.
-
-Open `https://docker.rishabhroy.com` to create the matching Portainer OAuth
-user. Portainer creates OAuth users as standard users; an idempotent five-minute
-timer promotes only `akadmin` to Portainer administrator.
-
-Node settings:
+Create the Pyrodactyl node with:
 
 - FQDN: `wings.rishabhroy.com`
-- Communicate over SSL: yes
-- Behind proxy: yes
-- Daemon port: `443`
-- Daemon SFTP port: `2022`
-- Server data directory: `/var/lib/pterodactyl/volumes`
-- Total memory: at most `18432` MiB, with memory over-allocation disabled
-- Total disk: about `120000` MiB, with disk over-allocation disabled. This
-  leaves roughly 70 GB for NixOS, containers, Copyparty data, and local backups.
+- SSL: enabled
+- behind proxy: enabled
+- daemon port: `443`
+- daemon SFTP port: `2022`
+- server data directory: `/var/lib/pterodactyl/volumes`
 
-The service normalizes the generated Wings config on every start so that:
+Choose memory, disk, CPU, and allocation limits appropriate for the future
+hardware.
 
-- Wings API listens only on `127.0.0.1:8080` behind Caddy.
-- Wings TLS stays disabled internally because Caddy terminates TLS.
-- Caddy's loopback address is the only trusted proxy.
-- SFTP stays on its authenticated SSH-based service port `2022`.
-- All root, log, archive, backup, temporary, and server-data paths use the
-  persistent `/var/lib/pterodactyl` layout.
-
-Copy the node's generated Wings YAML into `pterodactyl_wings_config`:
-
-1. In Pyrodactyl, open **Admin > Nodes > rishabh-vm > Configuration**.
-2. Copy the complete YAML configuration shown by the panel.
-3. Open the SOPS file with the command below.
-4. Replace the indented Wings placeholder after `pterodactyl_wings_config: |`
-   with the complete config, keeping it indented beneath the `|`.
+Copy the complete generated node YAML from **Admin > Nodes > rishabh-vm >
+Configuration** into `pterodactyl_wings_config`:
 
 ```bash
 cd hosts/rishabh-vm
@@ -544,147 +247,55 @@ git commit -m "configure rishabh-vm wings"
 git push
 ```
 
-Then deploy:
+Deploy it:
 
 ```bash
 sudo nixos-rebuild switch \
-  --flake github:rishabhroyy/nixconf?dir=hosts/rishabh-vm#rishabh-vm
+  --flake 'github:rishabhroyy/nixconf?dir=hosts/rishabh-vm#rishabh-vm'
 ```
 
-Create allocations using the VM's public IPv4 and ports 25565-25575.
-Keep the combined CPU limits of simultaneously running game servers at or below
-roughly 300% so one of the four Ampere cores remains available to the host,
-databases, SSO, reverse proxy, and maintenance jobs.
+Wings automatically downloads the verified release matching the host
+architecture.
 
-Verify Wings after deploying its configuration:
-
-```bash
-sudo systemctl status pterodactyl-wings
-sudo journalctl -u pterodactyl-wings --since today
-```
-
-## Copyparty
-
-`cloud.rishabhroy.com` uses Authentik header-based SSO and has no anonymous
-volume permissions. Authenticated Authentik users are placed in Copyparty's
-built-in `acct` group. Share links created while signed in are served under
-`/share/...` and remain usable by recipients without an Authentik account.
-
-Copyparty's web UI works through browser SSO. Typical WebDAV clients cannot
-complete an interactive Authentik browser login, and FTP, FTPS, SFTP, and SMB
-cannot carry an Authentik browser session either. Because no Copyparty-local
-passwords are configured and no extra protocol ports are exposed, those access
-methods are intentionally unavailable in this flake. SMB is especially
-unsuitable for exposure to the public internet.
-
-## SSO Boundary
+## Access Boundaries
 
 Every human-facing web UI is gated by Authentik:
 
-- `docker.rishabhroy.com`
-- `cloud.rishabhroy.com`, except explicit `/share/...` links
-- `games.rishabhroy.com`, except the token-authenticated `/api/remote/...`
-  machine API used by Wings
+- Portainer uses native OAuth.
+- Copyparty consumes Authentik identity headers.
+- Pyrodactyl uses the checked-in SSO middleware.
+- Copyparty share links remain usable without an Authentik account.
 
-`wings.rishabhroy.com`, game allocation ports, SSH, and Wings SFTP cannot use
-browser SSO. Wings provides SFTP, not FTP. Use the host, port, and username
-shown by Pyrodactyl. Every user who needs SFTP should add their own SSH public
-key from **Account > SSH Keys**. Non-administrator users can use SFTP for
-servers they own or servers where they were explicitly granted the `file.sftp`
-permission. The exact SFTP username is shown in each server's **Settings** page
-and has the form `username.server-id`.
+Browser SSO cannot protect SSH, game ports, Wings SFTP, or non-browser
+Copyparty protocols. This configuration intentionally exposes no Copyparty FTP,
+SFTP, SMB, or WebDAV authentication.
 
-Their Authentik password is never accepted by Wings, even if the Pyrodactyl UI
-claims the SFTP password matches the panel password. Use the registered SSH key
-instead; no shared SFTP password is stored in SOPS. Adding Authentik
-forward-auth to Wings would break Panel communication and browser console
-WebSockets.
+Wings SFTP uses port 2022 and SSH keys registered by each Pyrodactyl user.
+Non-administrator users can use SFTP for servers where they have the required
+file permissions.
 
-Portainer uses native OAuth. Copyparty consumes Authentik headers. Pyrodactyl
-uses the checked-in `pyrodactyl-sso` middleware, which automatically provisions
-users and logs them into the panel after Authentik succeeds. Pyrodactyl is
-pre-release software and this middleware patches its Laravel middleware list at
-container startup; if an upstream update changes that integration point, the
-container deliberately fails instead of silently running without SSO.
+## Updates And Maintenance
 
-## Updates
+The server reads the public GitHub repository without logging into GitHub or
+mutating it.
 
-The server does not log into GitHub and does not mutate this repository.
-`system.autoUpgrade` fetches the public GitHub flake, evaluates it, and switches
-the machine to it. Container and Wings timers independently fetch current
-upstream releases.
+Automatic jobs cover:
 
-This nested flake intentionally has no `flake.lock`. On each automatic upgrade,
-Nix resolves the current revisions of the `nixos-26.05` and sops-nix inputs, so
-package details and versions advance without committing anything to the
-repository. The tradeoff is that a build is not perfectly reproducible later.
-Adding a lock file would improve reproducibility, but then a separate trusted
-workflow would need to update, test, commit, and push that lock file before the
-server could consume newer Nix inputs.
+- NixOS package and configuration upgrades
+- container image updates with readiness checks
+- verified Wings updates
+- certificate renewal
+- failed-service recovery
+- Nix and Docker garbage collection
+- local database/configuration dumps
 
-Automatic updates cover NixOS packages, this flake after it is pushed to
-GitHub, application containers, Wings, certificate renewal, service restarts,
-garbage collection, and local database dumps. They cannot automatically fix an
-incompatible upstream release, expired domain registration, OCI account issues,
-lost secrets, a full disk containing irreplaceable user data, or hardware/cloud
-failures.
+This nested flake intentionally has no `flake.lock`, so automatic upgrades
+resolve current `nixos-26.05` and sops-nix revisions. Advance the NixOS release
+approximately every six months and Authentik's pinned release line as needed.
 
-`rishabhroyy/nixconf` is publicly readable, so the GitHub flake URL works
-without a GitHub login. Auto-upgrade only reads the repository; it never
-commits, pushes, or otherwise mutates it.
-
-Container image updates are tracked with persistent pending markers. A changed
-image triggers an immediate database/config dump, then is restarted only after
-all pulls have been attempted. Its marker is removed only after the relevant
-database health check or HTTP readiness check succeeds. If a pull or restart
-fails, the next daily run retries it. This avoids restarting every database and
-application merely because the update timer ran.
-
-## Explicit Assumptions
-
-These values were not all stated explicitly and should be reviewed before
-installation:
-
-- The OCI VM has 4 Ampere OCPUs, 24 GiB RAM, and a 200 GB boot volume.
-- The server timezone should be `America/Los_Angeles`.
-- TCP/UDP `25565-25575` is enough for game allocations.
-- Public key-only SSH on TCP 22 is desired as a recovery path.
-- No persistent swap, 14 days of local database dumps, and the documented
-  maintenance times are acceptable.
-- `auth.rishabhroy.com` and `wings.rishabhroy.com` may be added alongside the
-  three subdomains you specified because Authentik and Wings need endpoints.
-- The Authentik bootstrap identity `akadmin` should be administrator in
-  Pyrodactyl and Portainer.
-
-## Maintenance And Recovery
-
-### Expected Involvement
-
-For ordinary operation, expect no weekly or monthly maintenance. The server
-automatically applies routine package and application updates, renews
-certificates, restarts failed services, cleans disposable data, and creates
-local database dumps.
-
-Plan on a short review roughly every three months and a required configuration
-update at least every six months:
-
-- Authentik supports only its two newest release lines. Review its release notes
-  and advance `authentikImage` to a newer supported line when appropriate.
-- NixOS stable releases every six months. Advance `nixos-26.05` before it stops
-  receiving security fixes.
-- Check `systemctl --failed`, remaining disk space, domain renewal, OCI account
-  status, and whether Tailscale still shows `rishabh-vm` as connected with key
-  expiry disabled.
-- Configure each game server's own Pyrodactyl schedule or startup updater if you
-  want that game's binaries, mods, or plugins updated automatically. The host
-  can update Pyrodactyl and Wings, but it cannot safely guess how to upgrade
-  every game workload.
-
-Unplanned involvement is still possible after an incompatible upstream
-container release, a failed NixOS upgrade, disk exhaustion from user/game data,
-lost credentials, DNS changes, or an OCI outage. Because no external monitoring
-or remote backup was requested, the server cannot notify you or recover
-irreplaceable Copyparty files, game worlds, or other user data on its own.
+Automatic maintenance cannot recover lost user data, fix incompatible upstream
+releases, renew domains, repair failed hardware, or replace external backups
+and monitoring.
 
 Useful checks:
 
@@ -697,13 +308,4 @@ sudo systemctl status rishabh-vm-healthcheck.timer
 sudo systemctl status rishabh-vm-disk-guard.timer
 ```
 
-Database dumps are kept for 14 days under `/var/backups/rishabh-vm`. External
-boot-volume backups and uptime monitoring are optional and are not required by
-this setup.
-
-No configuration can honestly guarantee that a public, automatically upgraded
-server will never need intervention. This setup automatically restarts failed
-services, verifies Wings downloads, renews certificates, backs up databases,
-updates applications, reclaims disposable data above 85% disk usage without
-deleting stopped game-server containers, upgrades NixOS, and reboots in a
-maintenance window.
+Database dumps are retained for 14 days under `/var/backups/rishabh-vm`.

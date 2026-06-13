@@ -1,5 +1,5 @@
 {
-  description = "NixOS configuration for the Oracle Cloud ARM server rishabh-vm";
+  description = "Reusable x86_64 NixOS server configuration for rishabh-vm";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -10,7 +10,7 @@
 
   outputs = { nixpkgs, sops-nix, ... }: {
     nixosConfigurations.rishabh-vm = nixpkgs.lib.nixosSystem {
-      system = "aarch64-linux";
+      system = "x86_64-linux";
       modules = [
         sops-nix.nixosModules.sops
         ./configuration.nix
