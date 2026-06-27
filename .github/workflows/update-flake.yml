@@ -1,0 +1,73 @@
+name: Update flake inputs
+
+on:
+  schedule:
+    # Monday 7 AM Pacific (14:00 UTC)
+    # Minute=0, Hour=14, Day=*, Month=*, Weekday=1(Monday)
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Capture old revisions
+        run: |
+          nix flake metadata --json | jq -r '.locks.nodes | to_entries[] | select(.value.locked.rev?) | "\(.key) \(.value.locked.rev) \(.value.locked.type // "github"):\(.value.locked.owner // ""):\(.value.locked.repo // "")"' > /tmp/old-revs.txt || true
+
+      - name: Update flake.lock
+        run: nix flake update
+
+      - name: Check for changes and build summary
+        id: diff
+        run: |
+          if git diff --quiet flake.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          # Build human-readable changelog
+          nix flake metadata --json | jq -r '.locks.nodes | to_entries[] | select(.value.locked.rev?) | "\(.key) \(.value.locked.rev)"' > /tmp/new-revs.txt || true
+
+          {
+            echo 'summary<<EOSUMMARY'
+            echo "## Updated inputs"
+            echo ""
+            while IFS=' ' read -r name old_rev extra; do
+              new_rev=$(grep "^$name " /tmp/new-revs.txt | cut -d' ' -f2 || true)
+              if [ -n "$new_rev" ] && [ "$old_rev" != "$new_rev" ]; then
+                short_old="${old_rev:0:7}"
+                short_new="${new_rev:0:7}"
+                # Try to build a compare URL for github inputs
+                owner_repo=$(echo "$extra" | awk -F: '{if($2!="" && $3!="") print $2"/"$3}')
+                if [ -n "$owner_repo" ]; then
+                  echo "- **$name**: [\`$short_old\` → \`$short_new\`](https://github.com/$owner_repo/compare/$old_rev...$new_rev)"
+                else
+                  echo "- **$name**: \`$short_old\` → \`$short_new\`"
+                fi
+              fi
+            done < /tmp/old-revs.txt
+            echo ""
+            echo "**⚠️ This system has a fragile VFIO setup with patched QEMU/OVMF.** A nixpkgs bump can break \`substituteInPlace\` calls in the overlay. Review before merging."
+            echo 'EOSUMMARY'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create PR
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: auto/flake-update
+          delete-branch: true
+          title: "flake.lock: update inputs"
+          body: ${{ steps.diff.outputs.summary }}
+          commit-message: "flake.lock: update inputs"
+          committer: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
