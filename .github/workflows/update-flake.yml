@@ -35,7 +35,6 @@ jobs:
           fi
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-          # Build human-readable changelog
           nix flake metadata --json | jq -r '.locks.nodes | to_entries[] | select(.value.locked.rev?) | "\(.key) \(.value.locked.rev)"' > /tmp/new-revs.txt || true
 
           {
@@ -47,7 +46,6 @@ jobs:
               if [ -n "$new_rev" ] && [ "$old_rev" != "$new_rev" ]; then
                 short_old="${old_rev:0:7}"
                 short_new="${new_rev:0:7}"
-                # Try to build a compare URL for github inputs
                 owner_repo=$(echo "$extra" | awk -F: '{if($2!="" && $3!="") print $2"/"$3}')
                 if [ -n "$owner_repo" ]; then
                   echo "- **$name**: [\`$short_old\` → \`$short_new\`](https://github.com/$owner_repo/compare/$old_rev...$new_rev)"
@@ -56,10 +54,27 @@ jobs:
                 fi
               fi
             done < /tmp/old-revs.txt
-            echo ""
-            echo "**⚠️ This system has a fragile VFIO setup with patched QEMU/OVMF.** A nixpkgs bump can break \`substituteInPlace\` calls in the overlay. Review before merging."
             echo 'EOSUMMARY'
           } >> "$GITHUB_OUTPUT"
+
+      - name: Build patched QEMU
+        if: steps.diff.outputs.changed == 'true'
+        run: nix build .#nixosConfigurations.rishabh-nix.config.virtualisation.libvirtd.qemu.package --no-link
+
+      - name: Build patched OVMF
+        if: steps.diff.outputs.changed == 'true'
+        run: nix build .#nixosConfigurations.rishabh-nix.pkgs.ovmf_win11 --no-link
+
+      - name: Build full system closure
+        if: steps.diff.outputs.changed == 'true'
+        id: build
+        run: |
+          if nix build .#nixosConfigurations.rishabh-nix.config.system.build.toplevel --no-link 2>&1; then
+            echo "result=✅ Full system build succeeded" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=❌ Full system build failed (QEMU/OVMF patches may have passed but another package broke)" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
 
       - name: Create PR
         if: steps.diff.outputs.changed == 'true'
@@ -68,6 +83,14 @@ jobs:
           branch: auto/flake-update
           delete-branch: true
           title: "flake.lock: update inputs"
-          body: ${{ steps.diff.outputs.summary }}
+          body: |
+            ${{ steps.diff.outputs.summary }}
+
+            ## Build verification
+            - ✅ Patched QEMU compiled (substituteInPlace targets still match upstream)
+            - ✅ Patched OVMF compiled (ACPI OEM ID patches still match upstream)
+            - ${{ steps.build.outputs.result }}
+
+            > ⚠️ Build verification confirms patches apply and compile. Runtime VFIO behavior can only be verified on the actual host.
           commit-message: "flake.lock: update inputs"
           committer: "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
