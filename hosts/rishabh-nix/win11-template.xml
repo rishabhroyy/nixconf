@@ -38,6 +38,9 @@
     <loader readonly='yes' secure='yes' type='pflash'>$OVMF_CODE</loader>
     <nvram template='$OVMF_VARS'>/var/lib/libvirt/qemu/nvram/win11_VARS.fd</nvram>
     <smbios mode='sysinfo'/>
+    <!-- ponytail: 5s delay lets passthrough NVMe finish controller init before
+         OVMF picks a boot entry. Raise if recovery persists. -->
+    <bootmenu enable='yes' timeout='5000'/>
   </os>
   <sysinfo type='smbios'>
     <bios>
