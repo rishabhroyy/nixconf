@@ -10,7 +10,7 @@
   # latency-sensitive CPU cores remain available to the Windows guest.
   virtualisation.oci-containers.containers = builtins.mapAttrs (_: container:
     container // {
-      extraOptions = (container.extraOptions or []) ++ [ "--cpuset-cpus=0-1,8-9" ];
+      extraOptions = (container.extraOptions or []) ++ [ "--cpuset-cpus=0-3,8-11" ];
     }
   ) {
     # ---------------------------------------------------------
