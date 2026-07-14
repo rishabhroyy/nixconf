@@ -26,16 +26,16 @@ in
   boot.kernelParams = [
     "amd_iommu=on"
     "iommu=pt"
-    # Isolate physical cores 4-7 for the Windows 11 VM.
-    # Physical cores 0-3 remain shared for NixOS and QEMU housekeeping.
-    "isolcpus=domain,managed_irq,4-7,12-15"
-    "nohz_full=4-7,12-15"
-    "rcu_nocbs=4-7,12-15"
+    # Isolate physical cores 2-7 for the Windows 11 VM (6 cores / 12 threads).
+    # Physical cores 0-1 (logical 0-1, 8-9) are reserved for NixOS and QEMU housekeeping.
+    "isolcpus=domain,managed_irq,2-7,10-15"
+    "nohz_full=2-7,10-15"
+    "rcu_nocbs=2-7,10-15"
     # Keep offloaded RCU callbacks from waking latency-sensitive guest CPUs.
     "rcu_nocb_poll"
-    "irqaffinity=0-3,8-11"
-    "workqueue.unbound_cpus=0-3,8-11"
-    "systemd.cpu_affinity=0-3,8-11"
+    "irqaffinity=0-1,8-9"
+    "workqueue.unbound_cpus=0-1,8-9"
+    "systemd.cpu_affinity=0-1,8-9"
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
@@ -47,9 +47,10 @@ in
 
   powerManagement.cpuFreqGovernor = "performance";
 
-  # Enable nested virtualization for Windows VBS/Core Isolation and AVIC as a
-  # normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
-  boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
+  # Enable AVIC as a normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
+  # nested=1 enables VBS/Core Isolation inside the guest — re-add to restore:
+  # boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
+  boot.extraModprobeConfig = "options kvm_amd avic=1";
 
   # Load VFIO early so dedicated passthrough devices never bind to host drivers.
   boot.initrd.kernelModules = [
@@ -413,13 +414,14 @@ EOF
         <direct state='on'/>
       </stimer>
       <reset state='on'/>
-      <vendor_id state='on' value='GenuineIntel'/>
       <frequencies state='on'/>
-      <reenlightenment state='on'/>
+      <!-- re-enable with nested=1: <reenlightenment state='on'/> -->
       <tlbflush state='on'/>
       <ipi state='on'/>
     </hyperv>"
-      export SVM_FEATURE="    <feature policy='require' name='svm'/>"
+      # re-enable with nested=1 (exposes SVM to Windows for VBS/Core Isolation):
+      # export SVM_FEATURE="    <feature policy='require' name='svm'/>"
+      export SVM_FEATURE=""
       export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
 
       export QEMU_COMMANDLINE="  <qemu:commandline>
@@ -740,8 +742,8 @@ EOF
       ${pkgs.coreutils}/bin/cat /sys/devices/virtual/workqueue/cpumask 2>/dev/null || true
       echo "threads currently executing on latency-sensitive CPUs:"
       ${pkgs.procps}/bin/ps -eLo pid,tid,psr,cls,rtprio,comm --no-headers | ${pkgs.gawk}/bin/awk '
-        $3 == 4 || $3 == 5 || $3 == 6 || $3 == 7 ||
-        $3 == 12 || $3 == 13 || $3 == 14 || $3 == 15 { print }
+        $3 == 2 || $3 == 3 || $3 == 4 || $3 == 5 || $3 == 6 || $3 == 7 ||
+        $3 == 10 || $3 == 11 || $3 == 12 || $3 == 13 || $3 == 14 || $3 == 15 { print }
       ' || true
 
       echo
