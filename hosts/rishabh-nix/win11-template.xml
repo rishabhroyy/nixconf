@@ -7,10 +7,11 @@
       <page size='1' unit='G'/>
     </hugepages>
   </memoryBacking>
-  <vcpu placement='static'>16</vcpu>
+  <vcpu placement='static'>8</vcpu>
   <cputune>
-    <!-- Put Windows' first four guest cores on isolated host cores. Foreground
-         work, interrupts, and DPCs commonly favor these low-numbered CPUs. -->
+    <!-- All 8 vCPUs pinned exclusively to isolated physical cores 4-7 (host
+         cores 0-3 stay fully reserved for NixOS/QEMU housekeeping, no
+         Windows vcpus share them). -->
     <vcpupin vcpu='0' cpuset='4'/>
     <vcpupin vcpu='1' cpuset='12'/>
     <vcpupin vcpu='2' cpuset='5'/>
@@ -19,18 +20,7 @@
     <vcpupin vcpu='5' cpuset='14'/>
     <vcpupin vcpu='6' cpuset='7'/>
     <vcpupin vcpu='7' cpuset='15'/>
-    <!-- Keep four additional guest cores visible on the housekeeping CPUs so
-         Windows retains the bare-metal-like 8-core / 16-thread topology. -->
-    <vcpupin vcpu='8' cpuset='0'/>
-    <vcpupin vcpu='9' cpuset='8'/>
-    <vcpupin vcpu='10' cpuset='1'/>
-    <vcpupin vcpu='11' cpuset='9'/>
-    <vcpupin vcpu='12' cpuset='2'/>
-    <vcpupin vcpu='13' cpuset='10'/>
-    <vcpupin vcpu='14' cpuset='3'/>
-    <vcpupin vcpu='15' cpuset='11'/>
     <emulatorpin cpuset='0-3,8-11'/>
-    <!-- Only vCPUs on host-isolated cores receive latency-oriented scheduling. -->
     <vcpusched vcpus='0-7' scheduler='rr' priority='1'/>
   </cputune>
   <os>
@@ -83,7 +73,7 @@ $HYPERV_FEATURES
     <ioapic driver='kvm'/>
   </features>
   <cpu mode='host-passthrough' check='none' migratable='off'>
-    <topology sockets='1' dies='1' cores='8' threads='2'/>
+    <topology sockets='1' dies='1' cores='4' threads='2'/>
     <cache mode='passthrough'/>
     <feature policy='require' name='topoext'/>
     <feature policy='disable' name='hypervisor'/>
