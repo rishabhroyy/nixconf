@@ -118,7 +118,7 @@ in
       UMask = "0077";
     };
     script = ''
-      install -d -m 0700 /var/lib/microvms/hermes/secrets
+      install -d -m 0711 /var/lib/microvms/hermes/secrets
       install -m 0400 ${config.sops.secrets.tailscale_auth_key.path} /var/lib/microvms/hermes/secrets/tailscale_auth_key
       install -m 0444 ${config.sops.secrets.signal_phone_number.path} /var/lib/microvms/hermes/secrets/signal_phone_number
     '';
