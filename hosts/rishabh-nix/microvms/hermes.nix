@@ -109,57 +109,27 @@
     authKeyFile = "/run/host-secrets/tailscale_auth_key";
   };
 
-  services.hermes-agent = {
-    enable = true;
-    # DeepSeek direct for now. deepseek-chat/deepseek-reasoner were retired
-    # 2026-07-24; deepseek-v4-flash is the current cheap model ($0.0028/M
-    # cache-hit, $0.14/M cache-miss input, $0.28/M output -- thinking mode is
-    # its default, so it already spends more reasoning tokens on hard
-    # problems and stays cheap on easy ones, no separate "pro" tier needed
-    # day to day). For a specific hard task, switch models for that session
-    # only with `/model deepseek:deepseek-v4-pro` in the TUI -- no rebuild.
-    # Subagents (delegation) use the same cheap model; they're usually doing
-    # narrower, simpler work than the main loop. base_url is intentionally
-    # NOT set here -- the deepseek provider plugin's own built-in default
-    # (https://api.deepseek.com/v1) is correct; overriding it risks getting
-    # the /v1 suffix wrong.
-    settings = {
-      provider = "deepseek";
-      model.default = "deepseek-v4-flash";
-      delegation = {
-        provider = "deepseek";
-        model = "deepseek-v4-flash";
-      };
-      # The deepseek provider plugin's built-in aux-model fallback is still
-      # "deepseek-chat" (retired 2026-07-24) as of this writing -- pin the
-      # two aux tasks that actually fire in normal use (everything else --
-      # kanban, TTS, vision -- is unused here) so they don't depend on that.
-      auxiliary = {
-        compression = {
-          provider = "deepseek";
-          model = "deepseek-v4-flash";
-        };
-        title_generation = {
-          provider = "deepseek";
-          model = "deepseek-v4-flash";
-        };
-      };
-    };
-    environmentFiles = [ "/run/host-secrets/hermes_env" ];
-    addToSystemPackages = true;
-  };
+  # Hermes itself is installed as a plain package (flake.nix), not through
+  # services.hermes-agent -- that module ties the CLI to a shared, package-
+  # manager-"managed" HERMES_HOME and unconditionally drops a `.managed`
+  # marker in it, which makes `hermes setup` / `hermes config edit` refuse
+  # to run. Going unmanaged means `hermes setup` works normally as rishabh,
+  # and with no HERMES_HOME override, it defaults to ~/.hermes --
+  # i.e. /home/rishabh/.hermes, which is already persistent (the /home
+  # bind mount above). Nothing further needed for persistence.
 
   # ponytail: baseline coding toolchain -- agent has nothing to build/run
   # projects with otherwise. Extend here (declaratively) as needed; agent
-  # can also self-serve extra system packages at runtime now via `nix
-  # profile install` / `nix shell` (writableStoreOverlay above), and
-  # ad-hoc pip/npm/uv into project dirs or $HOME always just worked.
+  # can also self-serve extra system packages at runtime via `nix profile
+  # install` / `nix shell` (writableStoreOverlay above), and ad-hoc
+  # pip/npm/uv into project dirs or $HOME always just worked.
   environment.systemPackages = with pkgs; [
     git
     python3
     uv
     nodejs
     pnpm
+    signal-cli
   ];
 
   system.stateVersion = "24.05";

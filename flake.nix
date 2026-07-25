@@ -142,7 +142,14 @@ EOF
             microvm.autostart = [ "hermes" ];
             microvm.vms.hermes.config = {
               imports = [
-                hermes-agent.nixosModules.default
+                # Package only -- deliberately NOT importing
+                # hermes-agent.nixosModules.default's services.hermes-agent.
+                # That module writes a `.managed` marker into HERMES_HOME on
+                # every activation regardless of what's configured, which
+                # makes the CLI (`hermes setup`, `hermes config edit`, ...)
+                # refuse to run. Config is manual/unmanaged on purpose --
+                # see hermes.nix.
+                { environment.systemPackages = [ hermes-agent.packages.x86_64-linux.default ]; }
                 ./hosts/rishabh-nix/microvms/hermes.nix
               ];
             };

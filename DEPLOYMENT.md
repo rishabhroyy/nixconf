@@ -200,57 +200,31 @@ host's root disk — the host has one ext4 filesystem, no separate `/var`
 partition). That's a ceiling, not a reservation: the image is sparse and
 grows/shrinks with actual usage (see "Disk sizing" below). It joins your
 tailnet independently of the host and is reachable only over Tailscale, not
-the LAN. Config is fully declarative, in
-`hosts/rishabh-nix/microvms/hermes.nix` — nothing is set up by hand inside
-the guest.
+the LAN.
 
-### 1. Add the API key
+VM shape (CPU/RAM/disk/networking/store) is declarative, in
+`hosts/rishabh-nix/microvms/hermes.nix`. Hermes *itself* is deliberately
+**not** — it's installed as a plain package (`flake.nix`), not through
+`services.hermes-agent`. That NixOS module ties the CLI to a shared
+`HERMES_HOME` and unconditionally drops a `.managed` marker into it on every
+activation, which makes `hermes setup` / `hermes config set` / `hermes
+config edit` refuse to run. Going unmanaged trades that seamlessness for
+robustness: no service half-configured and crash-looping while waiting on a
+key, no config format inferred ahead of the Tier-2 docs actually confirming
+it — you just run the same `hermes setup` anyone else would.
 
-Same file, same key, same `sops` workflow you already use for everything
-else on this host:
-
-```bash
-sops hosts/rishabh-nix/secrets.yaml
-```
-
-Add:
-
-```yaml
-hermes_env: |
-  DEEPSEEK_API_KEY=sk-...              # platform.deepseek.com -> API keys
-```
-
-`hermes_env` becomes the guest's `environmentFiles` entry, so every line in
-it is just `VAR=value`, one provider key per line — that's also where
-you'll add `OPENROUTER_API_KEY` or a Moonshot/Kimi key later (see step 4).
-Hermes reuses the host's existing `tailscale_auth_key` to join the tailnet
-(no separate key) — that key must be **reusable** in the Tailscale admin
-console, since both the host and Hermes authenticate with it.
-
-The host decrypts this as usual (it's already trusted with everything in
-that file). A systemd oneshot, `hermes-secrets-sync` (in
-`configuration.nix`), copies out `hermes_env` and the existing
-`tailscale_auth_key` to `/var/lib/microvms/hermes/secrets/`, a directory
-shared read-only into the guest at `/run/host-secrets`, before the microvm
-starts. The guest itself never holds a decryption key or sees the encrypted
-file — if it's ever compromised it can only read those plaintext values, not
-the rest of `secrets.yaml` (motherboard IDs, immich/copyparty passwords,
-your login password).
-
-### 2. Start it up
+### 1. Start it up
 
 ```bash
 sudo nixos-rebuild switch --flake .#rishabh-nix
 ```
 
-One command: builds the guest, decrypts and syncs the two secrets in, and
-autostarts it (`microvm.autostart = [ "hermes" ]`). No separate file, no
-separate key, no manual bootstrap step.
+Builds the guest and autostarts it (`microvm.autostart = [ "hermes" ]`).
 
 Windows' RAM cut (16GB -> 12GB, freeing 4GB for Hermes) needs a **host
 reboot** too — see "RAM budget" below.
 
-### 3. Verify and connect
+### 2. Verify, connect, and configure
 
 ```bash
 systemctl status microvm@hermes      # on the host: is the guest up?
@@ -261,98 +235,19 @@ Find the guest's tailnet name/IP in the Tailscale admin console (hostname
 
 ```bash
 ssh rishabh@hermes-agent             # over Tailscale, MagicDNS
-systemctl status hermes-agent        # in the guest: is the agent running?
-journalctl -u hermes-agent -f        # tail logs, e.g. to confirm the model/key are accepted
+hermes setup                         # first-time provider/API key/model config
 hermes --tui
 ```
 
-`addToSystemPackages = true` puts `hermes` / `hermes-agent` / `hermes-acp` on
-PATH. Because config is declarative, `hermes setup` / `hermes config set` /
-`hermes config edit` / `hermes gateway install` are all blocked in-guest —
-edit `hosts/rishabh-nix/microvms/hermes.nix` and rebuild instead.
+`hermes` is on PATH for every user in the guest (package installed via
+`environment.systemPackages` in `flake.nix`). With no `HERMES_HOME`
+override, it defaults to `~/.hermes` — i.e. `/home/rishabh/.hermes` — where
+`hermes setup` writes your provider, model, and API key. That's already
+persistent, see "Persistence inside the guest" below.
 
-The exact env var name for a new provider and the `provider`/`model.default`
-string format are inferred from Hermes's docs (best-effort Tier 2 support,
-not fully spelled out there) — `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY`
-are confirmed, `DEEPSEEK_API_KEY` follows the same `<PROVIDER>_API_KEY`
-pattern but isn't documented verbatim. If the service fails to authenticate,
-`journalctl -u hermes-agent -f` will name the problem directly; fix the var
-name or `settings` block in `hermes.nix` and rebuild.
-
-### 4. Switching providers later (Kimi, OpenRouter, ...)
-
-`hermes.nix` currently has:
-
-```nix
-services.hermes-agent.settings = {
-  provider = "deepseek";
-  model.default = "deepseek-v4-flash";
-  delegation = {
-    provider = "deepseek";
-    model = "deepseek-v4-flash";
-  };
-  auxiliary = {
-    compression.provider = "deepseek";
-    compression.model = "deepseek-v4-flash";
-    title_generation.provider = "deepseek";
-    title_generation.model = "deepseek-v4-flash";
-  };
-};
-```
-
-(`model.base_url` is deliberately not set — the `deepseek` provider plugin's
-own built-in default, `https://api.deepseek.com/v1`, is correct; an earlier
-draft of this config overrode it to `https://api.deepseek.com`, missing the
-required `/v1` suffix. The `auxiliary` block exists because the plugin's
-built-in aux-model fallback is still the retired `deepseek-chat` as of this
-writing — pinned here for the two aux tasks that actually fire day-to-day.)
-
-To switch: add the new provider's key to `hermes_env` (step 1) and change
-`provider`/`model.default`. `deepseek`, `openrouter`, `anthropic`, `gemini`,
-`xai`, and others are native providers; Kimi/Moonshot isn't a listed native
-provider, so route it through OpenRouter instead — `provider = "openrouter";`
-with `model.default` set to OpenRouter's model id (e.g.
-`"moonshotai/kimi-k2"` — check https://openrouter.ai/models for the exact
-slug). OpenRouter also re-exposes DeepSeek and most other models under one
-key, if you'd rather standardize on a single provider going forward.
-Rebuild to apply.
-
-### Cost tiering (DeepSeek only)
-
-`deepseek-chat`/`deepseek-reasoner` were retired 2026-07-24; the config above
-already uses their replacements. Two current models, same account:
-
-- **`deepseek-v4-flash`** — what both `model.default` and `delegation.model`
-  use. $0.0028/M input (cache hit) / $0.14/M input (cache miss) / $0.28/M
-  output. Thinking mode is its *default* behavior — it already spends more
-  reasoning tokens on hard problems and fewer on easy ones, so cost scales
-  with difficulty automatically without needing a pricier model day to day.
-- **`deepseek-v4-pro`** — ~3x the price ($0.435/M miss input, $0.87/M
-  output). Not wired into `hermes.nix`; for an occasional genuinely hard
-  task, switch just that session with `/model deepseek:deepseek-v4-pro` in
-  the TUI, no rebuild needed, falls back to flash next session.
-
-Subagents (`delegation`) stay on flash too — they're typically narrower,
-simpler work than the main loop, so there's little reason to pay pro pricing
-there. I didn't wire cost overrides for the `auxiliary` tasks (title
-generation, session search, curator, etc.) — DeepSeek doesn't clearly
-support vision/embedding under this provider, and guessing wrong there risks
-silently breaking those features rather than saving a trivial amount.
-
-**Estimated daily cost**, assuming DeepSeek's blended cache-hit/miss pricing
-above (actual mix depends on how repetitive your context is session to
-session — check DeepSeek's usage dashboard after a few days to calibrate):
-
-| Usage level | Turns/day | Est. cost/day | Est. cost/month |
-|---|---|---|---|
-| Light (occasional chat/small tasks) | ~50 | ~$0.01 | ~$0.40 |
-| Heavy (active coding agent, subagents running) | ~500 | ~$0.30 | ~$9 |
-
-Even heavy daily use stays under $10/month on flash. The one thing that can
-surprise you: a long-running gateway service that's polling/idling on a
-messaging platform still makes occasional auxiliary-model calls even with no
-real work happening — negligible in dollars, but don't be alarmed by a
-nonzero baseline on the DeepSeek dashboard.
+Tailscale auth reuses the host's existing `tailscale_auth_key` (synced in by
+`hermes-secrets-sync` in `configuration.nix`, same mechanism as before) — no
+separate key needed for that part.
 
 ### Disk sizing
 
@@ -370,18 +265,18 @@ does that periodically. Check real usage on the host with
 The guest's `/` is rebuilt from the Nix store on every boot — only `/var`
 persists. That now covers:
 
-- hermes-agent's own state (`stateDir` defaults to `/var/lib/hermes` —
-  linked messaging accounts, sessions, memory)
+- **`/home`** — bind-mounted onto `/var/home` in `hermes.nix`. Hermes is
+  unmanaged (see above), so its state — `~/.hermes` (config, API key,
+  sessions, memory) — lives under `/home/rishabh` and survives reboots for
+  free, along with anything else you drop there by hand (dotfiles, cloned
+  repos, ad-hoc scripts).
 - the SSH host key (pinned to `/var/lib/ssh`, otherwise SSH trust resets
   every boot)
-- **`/home`** — bind-mounted onto `/var/home` in `hermes.nix`, so anything
-  you drop there by hand (dotfiles, cloned repos, ad-hoc scripts) now
-  survives reboots too
 
-Anything written outside `/var` (system packages installed imperatively,
-edits to files elsewhere under `/`) is still wiped every boot — install
-extra packages via `extraPackages`/`extraPythonPackages` in `hermes.nix`
-instead.
+Anything written outside `/var` (excluding `/nix/store`, which now has its
+own persistent writable overlay — see below) is still wiped every boot —
+add packages to `environment.systemPackages` in `hermes.nix` for anything
+that needs to survive that way instead.
 
 ### RAM budget
 

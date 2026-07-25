@@ -84,7 +84,6 @@ in
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
   sops.secrets.copyparty_password = {};
-  sops.secrets.hermes_env = {};
 
   # Hermes's 4 vCPUs are unpinned QEMU threads on the same 8-thread shared
   # pool (cores 0-3/8-11) as every container and the host itself -- Windows
@@ -95,15 +94,19 @@ in
   # of starving containers.
   systemd.services."microvm@hermes".serviceConfig.CPUWeight = 50;
 
-  # Copy secrets (decrypted above, host-side, from the same secrets.yaml as
-  # everything else) into the directory shared with the hermes microvm. The
-  # guest never gets a decryption key of its own, so a compromised agent
-  # there can only read these plaintext values, not the rest of this file.
-  # Tailscale auth key is the same one the host itself uses -- it must be a
-  # reusable key in the Tailscale admin console, since both the host and
-  # Hermes authenticate with it.
+  # Copy the Tailscale auth key (decrypted above, host-side, from the same
+  # secrets.yaml as everything else) into the directory shared with the
+  # hermes microvm. The guest never gets a decryption key of its own, so a
+  # compromised agent there can only read this one plaintext value, not the
+  # rest of this file. It's the same reusable key the host itself uses, so
+  # it must stay reusable in the Tailscale admin console.
+  #
+  # Deliberately not syncing a hermes_env/API-key secret here -- Hermes is
+  # unmanaged (see hosts/rishabh-nix/microvms/hermes.nix), configured by
+  # hand via `hermes setup` inside the guest, so there's nothing declarative
+  # to feed it.
   systemd.services.hermes-secrets-sync = {
-    description = "Copy hermes secrets into the shared microvm directory";
+    description = "Copy the Tailscale auth key into the shared microvm directory";
     before = [ "microvm@hermes.service" ];
     requiredBy = [ "microvm@hermes.service" ];
     serviceConfig = {
@@ -114,7 +117,6 @@ in
     script = ''
       install -d -m 0700 /var/lib/microvms/hermes/secrets
       install -m 0400 ${config.sops.secrets.tailscale_auth_key.path} /var/lib/microvms/hermes/secrets/tailscale_auth_key
-      install -m 0400 ${config.sops.secrets.hermes_env.path} /var/lib/microvms/hermes/secrets/hermes_env
     '';
   };
 
