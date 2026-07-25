@@ -80,6 +80,7 @@
   systemd.tmpfiles.rules = [ "d /var/home 0755 root root -" ];
   fileSystems."/home" = {
     device = "/var/home";
+    fsType = "none";
     options = [ "bind" ];
   };
 
