@@ -115,6 +115,10 @@
   # will pick up that same state on every start). Bound to localhost only,
   # matching the manual command this replaces -- nothing else in the guest
   # needs to reach it over the network.
+  #
+  # Phone number comes from the synced secret (/run/host-secrets), not a
+  # literal here -- an earlier version hardcoded it and it ended up
+  # committed and pushed to a public repo.
   systemd.services.signal-cli-daemon = {
     description = "signal-cli HTTP daemon";
     after = [ "network-online.target" ];
@@ -122,7 +126,9 @@
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       User = "rishabh";
-      ExecStart = "${pkgs.signal-cli}/bin/signal-cli --account REDACTED-PHONE daemon --http 127.0.0.1:8080";
+      ExecStart = pkgs.writeShellScript "signal-cli-daemon" ''
+        exec ${pkgs.signal-cli}/bin/signal-cli --account "$(cat /run/host-secrets/signal_phone_number)" daemon --http 127.0.0.1:8080
+      '';
       Restart = "always";
       RestartSec = 5;
     };

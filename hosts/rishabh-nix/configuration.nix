@@ -84,6 +84,7 @@ in
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
   sops.secrets.copyparty_password = {};
+  sops.secrets.signal_phone_number = {};
 
   # Hermes's 4 vCPUs are unpinned QEMU threads on the same 8-thread shared
   # pool (cores 0-3/8-11) as every container and the host itself -- Windows
@@ -94,19 +95,21 @@ in
   # of starving containers.
   systemd.services."microvm@hermes".serviceConfig.CPUWeight = 50;
 
-  # Copy the Tailscale auth key (decrypted above, host-side, from the same
-  # secrets.yaml as everything else) into the directory shared with the
-  # hermes microvm. The guest never gets a decryption key of its own, so a
-  # compromised agent there can only read this one plaintext value, not the
-  # rest of this file. It's the same reusable key the host itself uses, so
-  # it must stay reusable in the Tailscale admin console.
+  # Copy secrets (decrypted above, host-side, from the same secrets.yaml as
+  # everything else) into the directory shared with the hermes microvm. The
+  # guest never gets a decryption key of its own, so a compromised agent
+  # there can only read these plaintext values, not the rest of this file.
+  # tailscale_auth_key is the same reusable key the host itself uses.
+  # signal_phone_number backs the signal-cli-daemon service in hermes.nix --
+  # kept out of the tracked hermes.nix file after it got committed there and
+  # pushed to a public repo.
   #
-  # Deliberately not syncing a hermes_env/API-key secret here -- Hermes is
-  # unmanaged (see hosts/rishabh-nix/microvms/hermes.nix), configured by
-  # hand via `hermes setup` inside the guest, so there's nothing declarative
-  # to feed it.
+  # Deliberately not syncing a hermes_env/API-key secret here -- Hermes
+  # agent config is unmanaged (see hosts/rishabh-nix/microvms/hermes.nix),
+  # configured by hand via `hermes setup` inside the guest, so there's
+  # nothing declarative to feed it.
   systemd.services.hermes-secrets-sync = {
-    description = "Copy the Tailscale auth key into the shared microvm directory";
+    description = "Copy secrets into the shared microvm directory";
     before = [ "microvm@hermes.service" ];
     requiredBy = [ "microvm@hermes.service" ];
     serviceConfig = {
@@ -117,6 +120,7 @@ in
     script = ''
       install -d -m 0700 /var/lib/microvms/hermes/secrets
       install -m 0400 ${config.sops.secrets.tailscale_auth_key.path} /var/lib/microvms/hermes/secrets/tailscale_auth_key
+      install -m 0400 ${config.sops.secrets.signal_phone_number.path} /var/lib/microvms/hermes/secrets/signal_phone_number
     '';
   };
 
