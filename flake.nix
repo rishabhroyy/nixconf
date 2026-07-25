@@ -140,10 +140,12 @@ EOF
           microvm.nixosModules.host
           {
             microvm.autostart = [ "hermes" ];
-            microvm.vms.hermes.config = [
-              hermes-agent.nixosModules.default
-              ./hosts/rishabh-nix/microvms/hermes.nix
-            ];
+            microvm.vms.hermes.config = {
+              imports = [
+                hermes-agent.nixosModules.default
+                ./hosts/rishabh-nix/microvms/hermes.nix
+              ];
+            };
           }
           ./hosts/rishabh-nix/configuration.nix
         ];
