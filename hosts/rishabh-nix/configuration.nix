@@ -84,7 +84,40 @@ in
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
   sops.secrets.copyparty_password = {};
-  
+  sops.secrets.hermes_env = {};
+
+  # Hermes's 4 vCPUs are unpinned QEMU threads on the same 8-thread shared
+  # pool (cores 0-3/8-11) as every container and the host itself -- Windows
+  # is safe (isolcpus + systemd.cpu_affinity keep it off cores 4-7/12-15
+  # entirely), but nothing stops Hermes from crowding out Immich/Seanime/etc
+  # under load. Lower cgroup weight (default is 100) lets it still burst to
+  # all 4 vCPUs when the pool is idle, but yields under contention instead
+  # of starving containers.
+  systemd.services."microvm@hermes".serviceConfig.CPUWeight = 50;
+
+  # Copy secrets (decrypted above, host-side, from the same secrets.yaml as
+  # everything else) into the directory shared with the hermes microvm. The
+  # guest never gets a decryption key of its own, so a compromised agent
+  # there can only read these plaintext values, not the rest of this file.
+  # Tailscale auth key is the same one the host itself uses -- it must be a
+  # reusable key in the Tailscale admin console, since both the host and
+  # Hermes authenticate with it.
+  systemd.services.hermes-secrets-sync = {
+    description = "Copy hermes secrets into the shared microvm directory";
+    before = [ "microvm@hermes.service" ];
+    requiredBy = [ "microvm@hermes.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      UMask = "0077";
+    };
+    script = ''
+      install -d -m 0700 /var/lib/microvms/hermes/secrets
+      install -m 0400 ${config.sops.secrets.tailscale_auth_key.path} /var/lib/microvms/hermes/secrets/tailscale_auth_key
+      install -m 0400 ${config.sops.secrets.hermes_env.path} /var/lib/microvms/hermes/secrets/hermes_env
+    '';
+  };
+
   # Dynamically generate the Immich stack.env file natively from the Nix configuration
   sops.templates."immich.env".content = ''
     DB_PASSWORD=${config.sops.placeholder.immich_db_password}

@@ -41,7 +41,7 @@ in
     "kvm.report_ignored_msrs=0"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
-    "hugepages=16"
+    "hugepages=12"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
