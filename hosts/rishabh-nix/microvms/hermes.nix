@@ -109,6 +109,25 @@
     authKeyFile = "/run/host-secrets/tailscale_auth_key";
   };
 
+  # Assumes the account is already linked/registered (signal-cli's state
+  # lives in ~/.local/share/signal-cli, under rishabh's persistent /home --
+  # if it's not registered yet, run signal-cli manually first, then this
+  # will pick up that same state on every start). Bound to localhost only,
+  # matching the manual command this replaces -- nothing else in the guest
+  # needs to reach it over the network.
+  systemd.services.signal-cli-daemon = {
+    description = "signal-cli HTTP daemon";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      User = "rishabh";
+      ExecStart = "${pkgs.signal-cli}/bin/signal-cli --account REDACTED-PHONE daemon --http 127.0.0.1:8080";
+      Restart = "always";
+      RestartSec = 5;
+    };
+  };
+
   # Hermes itself is installed as a plain package (flake.nix), not through
   # services.hermes-agent -- that module ties the CLI to a shared, package-
   # manager-"managed" HERMES_HOME and unconditionally drops a `.managed`
