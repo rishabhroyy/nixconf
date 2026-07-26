@@ -485,6 +485,12 @@ EOF
           ;;
       esac
 
+      # Force a fresh PHY link negotiation on the RTL8125 NIC to prevent it
+      # from booting stuck at 100Mbps instead of 2.5Gbps.
+      echo "Resetting RTL8125 NIC link."
+      echo 1 > /sys/bus/pci/devices/0000:29:00.0/reset 2>/dev/null || true
+      ${pkgs.coreutils}/bin/sleep 2
+
       # Dedicated devices are already bound to vfio-pci. Start the persistent
       # libvirt domain normally and exactly once.
       echo "Starting win11."
