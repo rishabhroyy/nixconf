@@ -26,9 +26,6 @@ in
   boot.kernelParams = [
     "amd_iommu=on"
     "iommu=pt"
-    # Keep the RTL8125 passthrough NIC from entering buggy L1 substates that
-    # can leave Windows stuck at 100Mbps instead of 2.5Gbps.
-    "pcie_aspm=off"
     # Isolate physical cores 4-7 for the Windows 11 VM.
     # Physical cores 0-3 remain shared for NixOS and QEMU housekeeping.
     "isolcpus=domain,managed_irq,4-7,12-15"
@@ -536,7 +533,7 @@ EOF
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "win11 VM definition reset to the default stable profile."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure|<hyperv|hypervclock|qemu:commandline|timer name=.tsc.|feature policy=.require. name=.svm.' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure|<hyperv|hypervclock|qemu:commandline|timer name=.tsc.|feature policy=.require. name=.svm.|feature policy=.disable. name=.hypervisor.' || true
     '')
     (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
       set -eu
@@ -698,8 +695,8 @@ EOF
 
       echo
       echo "== CPU / Hypervisor Masking =="
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "poll-control state='off'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "poll-control state='on'" || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown

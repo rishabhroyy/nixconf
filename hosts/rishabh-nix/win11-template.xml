@@ -66,9 +66,9 @@
 $HYPERV_FEATURES
     <kvm>
       <hidden state='on'/>
-      <!-- Let halt-heavy render loops sleep instead of starving QEMU
-           housekeeping threads with busy polling. -->
-      <poll-control state='off'/>
+      <!-- Briefly poll for guest wakeups to avoid scheduler round trips on
+           latency-sensitive I/O completions. -->
+      <poll-control state='on'/>
     </kvm>
     <ioapic driver='kvm'/>
   </features>
@@ -76,6 +76,7 @@ $HYPERV_FEATURES
     <topology sockets='1' dies='1' cores='4' threads='2'/>
     <cache mode='passthrough'/>
     <feature policy='require' name='topoext'/>
+    <feature policy='disable' name='hypervisor'/>
 $SVM_FEATURE
     <feature policy='require' name='invtsc'/>
     <host-phys-bits mode='passthrough'/>
