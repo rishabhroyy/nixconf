@@ -67,10 +67,10 @@ vCPU threads pinned to isolated cores use low-priority real-time round-robin
 scheduling; QEMU housekeeping and host workloads keep normal scheduling.
 Windows' first four guest cores map to the isolated cores so foreground work,
 device interrupts, and DPCs are more likely to avoid host scheduling jitter.
-KVM poll-control briefly waits for guest wakeups to avoid some scheduler
-round trips, and `rcu_nocb_poll` prevents offloaded RCU callback processing
-from repeatedly waking the isolated guest CPUs. The host NMI watchdog remains
-enabled for hard-lockup diagnosis.
+KVM poll-control is disabled so halt-heavy render loops do not busy-wait and
+starve QEMU housekeeping threads, and `rcu_nocb_poll` prevents offloaded RCU
+callback processing from repeatedly waking the isolated guest CPUs. The host
+NMI watchdog remains enabled for hard-lockup diagnosis.
 
 The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
 and reboot events. It powers off NixOS only after libvirt reports the specific

@@ -20,12 +20,15 @@ Current stable profile for the `win11` libvirt domain.
 - The eight vCPU threads on those isolated cores use low-priority real-time
   round-robin scheduling; guest cores 4-7 and host work retain normal
   scheduling.
-- KVM poll-control reduces scheduler round trips for short guest wakeups.
+- KVM poll-control is disabled so halt-heavy render loops do not busy-wait and
+  starve QEMU housekeeping threads.
 - Offloaded RCU callbacks use polling so they do not repeatedly wake isolated
   guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
   containers prefer the housekeeping CPUs on physical cores 0-3.
 - Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
+- The guest keeps KVM hidden, but does not explicitly clear the CPU hypervisor
+  feature bit while Hyper-V enlightenment timers are enabled.
 - KVM IOAPIC, nested virtualization, and AVIC.
 - VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
