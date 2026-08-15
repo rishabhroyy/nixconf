@@ -54,11 +54,8 @@
       dependsOn = [ "tailscale-immich" ];
       extraOptions = [
         "--network=container:tailscale-immich"
+        "--device=nvidia.com/gpu=all"
       ];
-      environment = {
-        NVIDIA_VISIBLE_DEVICES = "all";
-        NVIDIA_DRIVER_CAPABILITIES = "all";
-      };
       environmentFiles = [ config.sops.templates."immich.env".path ];
       volumes = [
         "/var/lib/immich/model-cache:/cache"
@@ -158,12 +155,10 @@
       dependsOn = [ "tailscale-hokago" "hokago-postgres" "hokago-valkey" ];
       extraOptions = [
         "--network=container:tailscale-hokago"
-        "--group-add=video"
+        "--device=nvidia.com/gpu=all"
       ];
       environmentFiles = [ config.sops.templates."hokago.env".path ];
       environment = {
-        NVIDIA_VISIBLE_DEVICES = "all";
-        NVIDIA_DRIVER_CAPABILITIES = "all";
         VALKEY_URL = "redis://127.0.0.1:6379";
         HOKAGO_CONFIG_DIR = "/config";
         HOKAGO_WEB_ROOT = "/app/web";
@@ -185,12 +180,10 @@
       dependsOn = [ "hokago" ];
       extraOptions = [
         "--network=container:tailscale-hokago"
-        "--group-add=video"
+        "--device=nvidia.com/gpu=all"
       ];
       environmentFiles = [ config.sops.templates."hokago.env".path ];
       environment = {
-        NVIDIA_VISIBLE_DEVICES = "all";
-        NVIDIA_DRIVER_CAPABILITIES = "all";
         VALKEY_URL = "redis://127.0.0.1:6379";
         HOKAGO_CONFIG_DIR = "/config";
       };
