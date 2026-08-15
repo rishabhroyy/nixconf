@@ -101,54 +101,119 @@
     };
 
     # ---------------------------------------------------------
-    # Seanime
+    # Hokago
     # ---------------------------------------------------------
-    tailscale-seanime = {
+    tailscale-hokago = {
       image = "tailscale/tailscale:latest";
       environmentFiles = [ config.sops.templates."tailscale.env".path ];
       environment = {
-        TS_HOSTNAME = "seanime";
+        TS_HOSTNAME = "hokago";
         TS_STATE_DIR = "/var/lib/tailscale";
       };
       volumes = [
         "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-seanime:/var/lib/tailscale"
+        "/var/lib/tailscale-hokago:/var/lib/tailscale"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
         "--cap-add=NET_RAW"
       ];
-      # Map the Seanime port to the host via the Tailscale sidecar
-      ports = [ "3211:43211" ];
+      # Map the Hokago port to the host via the Tailscale sidecar
+      ports = [ "3211:3000" ];
     };
 
-    seanime = {
-      image = "umagistr/seanime:latest-cuda";
-      dependsOn = [ "tailscale-seanime" ];
+    hokago-postgres = {
+      image = "postgres:17-bookworm";
+      dependsOn = [ "tailscale-hokago" ];
       extraOptions = [
-        "--network=container:tailscale-seanime"
-        "--group-add=video"
+        "--network=container:tailscale-hokago"
       ];
+      environmentFiles = [ config.sops.templates."hokago.env".path ];
+      environment = {
+        POSTGRES_USER = "hokago";
+        POSTGRES_DB = "hokago";
+        PGDATA = "/var/lib/postgresql/data/pgdata";
+      };
+      volumes = [
+        "/var/lib/hokago/db:/var/lib/postgresql/data"
+      ];
+    };
+
+    hokago-valkey = {
+      image = "valkey/valkey:8-bookworm";
+      dependsOn = [ "tailscale-hokago" ];
+      extraOptions = [
+        "--network=container:tailscale-hokago"
+      ];
+      volumes = [
+        "/var/lib/hokago/cache/valkey:/data"
+      ];
+    };
+
+    # Migrations run before boot (postgres has no tables on first start) --
+    # a pre-migrate pg_dump snapshot makes every migration reversible
+    # in-place, mirroring hokago's own docker-compose.yml.
+    hokago = {
+      image = "ghcr.io/rishabhroyy/hokago:latest";
+      dependsOn = [ "tailscale-hokago" "hokago-postgres" "hokago-valkey" ];
+      extraOptions = [
+        "--network=container:tailscale-hokago"
+        "--group-add=video"
+        "--gpus=all"
+      ];
+      environmentFiles = [ config.sops.templates."hokago.env".path ];
       environment = {
         NVIDIA_VISIBLE_DEVICES = "all";
         NVIDIA_DRIVER_CAPABILITIES = "all";
-        SEANIME_SERVER_HOST = "0.0.0.0";
-        SEANIME_SERVER_URL = "http://seanime";
+        VALKEY_URL = "redis://127.0.0.1:6379";
+        HOKAGO_CONFIG_DIR = "/config";
+        HOKAGO_WEB_ROOT = "/app/web";
+        PORT = "3000";
+        TZ = "America/Los_Angeles";
+        HOKAGO_TRUST_PROXY = "true";
       };
+      cmd = [ "sh" "-c" ''mkdir -p /config/db-backups && f=/config/db-backups/pre-migrate-$(date +%Y%m%d-%H%M%S).sql.gz && pg_dump --no-owner "postgresql://hokago:$POSTGRES_PASSWORD@127.0.0.1:5432/hokago" | gzip > "$f"; [ "$(wc -c < "$f")" -gt 100 ] || rm -f "$f"; find /config/db-backups -name 'pre-migrate-*.sql.gz' -mtime +14 -delete; pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js'' ];
       volumes = [
-        "/var/lib/seanime:/home/seanime/.config/Seanime"
-        "/mnt/data4/YouTube/Anime:/anime"
-        "/mnt/data4/YouTube/seanime_downloads:/downloads"
+        "/dev/dri:/dev/dri"
+        "/var/lib/hokago/config:/config"
+        "/mnt/data4/YouTube/Movies:/media/movies:ro"
+        "/mnt/data4/YouTube/TV:/media/tv:ro"
+        "/mnt/data4/YouTube/Anime:/media/anime:ro"
       ];
     };
 
-    seanime-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-seanime" ];
+    hokago-worker = {
+      image = "ghcr.io/rishabhroyy/hokago:latest";
+      dependsOn = [ "hokago" ];
       extraOptions = [
-        "--network=container:tailscale-seanime"
+        "--network=container:tailscale-hokago"
+        "--group-add=video"
+        "--gpus=all"
       ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:43211" ];
+      environmentFiles = [ config.sops.templates."hokago.env".path ];
+      environment = {
+        NVIDIA_VISIBLE_DEVICES = "all";
+        NVIDIA_DRIVER_CAPABILITIES = "all";
+        VALKEY_URL = "redis://127.0.0.1:6379";
+        HOKAGO_CONFIG_DIR = "/config";
+      };
+      cmd = [ "sh" "-c" "exec node apps/worker/dist/index.js" ];
+      volumes = [
+        "/dev/dri:/dev/dri"
+        "/var/lib/hokago/config:/config"
+        "/mnt/data4/YouTube/Movies:/media/movies:ro"
+        "/mnt/data4/YouTube/TV:/media/tv:ro"
+        "/mnt/data4/YouTube/Anime:/media/anime:ro"
+      ];
+    };
+
+    hokago-proxy = {
+      image = "caddy:alpine";
+      dependsOn = [ "tailscale-hokago" ];
+      extraOptions = [
+        "--network=container:tailscale-hokago"
+      ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:3000" ];
     };
 
     # ---------------------------------------------------------

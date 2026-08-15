@@ -83,13 +83,14 @@ in
   sops.secrets.motherboard_serial = {};
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
+  sops.secrets.hokago_db_password = {};
   sops.secrets.copyparty_password = {};
   sops.secrets.signal_phone_number = {};
 
   # Hermes's 4 vCPUs are unpinned QEMU threads on the same 8-thread shared
   # pool (cores 0-3/8-11) as every container and the host itself -- Windows
   # is safe (isolcpus + systemd.cpu_affinity keep it off cores 4-7/12-15
-  # entirely), but nothing stops Hermes from crowding out Immich/Seanime/etc
+  # entirely), but nothing stops Hermes from crowding out Immich/Hokago/etc
   # under load. Lower cgroup weight (default is 100) lets it still burst to
   # all 4 vCPUs when the pool is idle, but yields under contention instead
   # of starving containers.
@@ -138,6 +139,11 @@ in
   # Dynamically generate the Tailscale environment file for Docker sidecars
   sops.templates."tailscale.env".content = ''
     TS_AUTHKEY=${config.sops.placeholder.tailscale_auth_key}
+  '';
+
+  sops.templates."hokago.env".content = ''
+    POSTGRES_PASSWORD=${config.sops.placeholder.hokago_db_password}
+    DATABASE_URL=postgresql://hokago:${config.sops.placeholder.hokago_db_password}@127.0.0.1:5432/hokago
   '';
 
   sops.templates."copyparty.conf" = {
@@ -239,9 +245,11 @@ in
   # Container Storage & Permissions
   # ---------------------------------------------------------
   systemd.tmpfiles.rules = [
-    "d /var/lib/seanime 0755 1001 1001 -"
+    "d /var/lib/hokago/config 0755 root root -"
+    "d /var/lib/hokago/db 0755 root root -"
+    "d /var/lib/hokago/cache/valkey 0755 root root -"
     "d /var/lib/tailscale-immich 0755 root root -"
-    "d /var/lib/tailscale-seanime 0755 root root -"
+    "d /var/lib/tailscale-hokago 0755 root root -"
     "d /var/lib/tailscale-portainer 0755 root root -"
     "d /var/lib/tailscale-copyparty 0755 root root -"
     "d /var/lib/immich 0755 1000 1000 -"
@@ -258,7 +266,12 @@ in
     requires = [ "mnt-data4.mount" ];
   };
 
-  systemd.services.docker-seanime = lib.mkIf (!recoveryMode) {
+  systemd.services.docker-hokago = lib.mkIf (!recoveryMode) {
+    after = [ "mnt-data4.mount" ];
+    requires = [ "mnt-data4.mount" ];
+  };
+
+  systemd.services.docker-hokago-worker = lib.mkIf (!recoveryMode) {
     after = [ "mnt-data4.mount" ];
     requires = [ "mnt-data4.mount" ];
   };
@@ -352,7 +365,9 @@ in
       echo "Pulling latest images for all stacks..."
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
       ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
-      ${pkgs.docker}/bin/docker pull umagistr/seanime:latest-cuda
+      ${pkgs.docker}/bin/docker pull ghcr.io/rishabhroyy/hokago:latest
+      ${pkgs.docker}/bin/docker pull postgres:17-bookworm
+      ${pkgs.docker}/bin/docker pull valkey/valkey:8-bookworm
       ${pkgs.docker}/bin/docker pull portainer/portainer-ce:latest
       ${pkgs.docker}/bin/docker pull copyparty/ac:latest
       ${pkgs.docker}/bin/docker pull caddy:alpine
@@ -368,10 +383,13 @@ in
                                              docker-immich-database.service \
                                              docker-immich-proxy.service
 
-      # Seanime Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-seanime.service \
-                                             docker-seanime.service \
-                                             docker-seanime-proxy.service
+      # Hokago Stack
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-hokago.service \
+                                             docker-hokago-postgres.service \
+                                             docker-hokago-valkey.service \
+                                             docker-hokago.service \
+                                             docker-hokago-worker.service \
+                                             docker-hokago-proxy.service
 
       # Portainer Stack
       ${pkgs.systemd}/bin/systemctl restart docker-tailscale-portainer.service \
