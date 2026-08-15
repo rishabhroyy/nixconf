@@ -173,7 +173,6 @@
       };
       cmd = [ "sh" "-c" ''mkdir -p /config/db-backups && f=/config/db-backups/pre-migrate-$(date +%Y%m%d-%H%M%S).sql.gz && pg_dump --no-owner "postgresql://hokago:$POSTGRES_PASSWORD@127.0.0.1:5432/hokago" | gzip > "$f"; [ "$(wc -c < "$f")" -gt 100 ] || rm -f "$f"; find /config/db-backups -name 'pre-migrate-*.sql.gz' -mtime +14 -delete; pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js'' ];
       volumes = [
-        "/dev/dri:/dev/dri"
         "/var/lib/hokago/config:/config"
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
@@ -197,7 +196,6 @@
       };
       cmd = [ "sh" "-c" "exec node apps/worker/dist/index.js" ];
       volumes = [
-        "/dev/dri:/dev/dri"
         "/var/lib/hokago/config:/config"
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
