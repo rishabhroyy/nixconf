@@ -42,6 +42,11 @@
       ];
       # Automatically loaded via SOPS Templates from configuration.nix
       environmentFiles = [ config.sops.templates."immich.env".path ];
+      environment = {
+        # Sidecar containers share tailscale-immich's network namespace,
+        # so container-name DNS doesn't resolve -- must use 127.0.0.1.
+        IMMICH_MACHINE_LEARNING_URL = "http://127.0.0.1:3003";
+      };
       volumes = [
         "/home/rishabh/immich/photos:/usr/src/app/upload"
         "/mnt/data4/Photos/Photos/iPhone_Photos:/usr/src/app/external/iphone_photoprism_backup:ro"
