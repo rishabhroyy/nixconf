@@ -159,7 +159,6 @@
       extraOptions = [
         "--network=container:tailscale-hokago"
         "--group-add=video"
-        "--gpus=all"
       ];
       environmentFiles = [ config.sops.templates."hokago.env".path ];
       environment = {
@@ -188,7 +187,6 @@
       extraOptions = [
         "--network=container:tailscale-hokago"
         "--group-add=video"
-        "--gpus=all"
       ];
       environmentFiles = [ config.sops.templates."hokago.env".path ];
       environment = {
