@@ -403,6 +403,50 @@ in
       
       echo "All containers updated and restarted!"
     '')
+    (pkgs.writeShellScriptBin "stop-hermes" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl stop microvm@hermes.service
+    '')
+    (pkgs.writeShellScriptBin "start-hermes" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl start microvm@hermes.service
+    '')
+    (pkgs.writeShellScriptBin "stop-hokago" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl stop docker-hokago-proxy.service \
+                                          docker-hokago-worker.service \
+                                          docker-hokago.service \
+                                          docker-hokago-valkey.service \
+                                          docker-hokago-postgres.service \
+                                          docker-tailscale-hokago.service
+    '')
+    (pkgs.writeShellScriptBin "start-hokago" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl start docker-tailscale-hokago.service \
+                                           docker-hokago-postgres.service \
+                                           docker-hokago-valkey.service \
+                                           docker-hokago.service \
+                                           docker-hokago-worker.service \
+                                           docker-hokago-proxy.service
+    '')
+    (pkgs.writeShellScriptBin "stop-immich" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl stop docker-immich-proxy.service \
+                                          docker-immich-server.service \
+                                          docker-immich-machine-learning.service \
+                                          docker-immich-redis.service \
+                                          docker-immich-database.service \
+                                          docker-tailscale-immich.service
+    '')
+    (pkgs.writeShellScriptBin "start-immich" ''
+      set -euo pipefail
+      ${pkgs.systemd}/bin/systemctl start docker-tailscale-immich.service \
+                                           docker-immich-database.service \
+                                           docker-immich-redis.service \
+                                           docker-immich-machine-learning.service \
+                                           docker-immich-server.service \
+                                           docker-immich-proxy.service
+    '')
   ];
 
   programs.git = {
@@ -419,5 +463,11 @@ in
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
     reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull --ff-only && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
+    stop-hermes = "sudo /run/current-system/sw/bin/stop-hermes";
+    start-hermes = "sudo /run/current-system/sw/bin/start-hermes";
+    stop-hokago = "sudo /run/current-system/sw/bin/stop-hokago";
+    start-hokago = "sudo /run/current-system/sw/bin/start-hokago";
+    stop-immich = "sudo /run/current-system/sw/bin/stop-immich";
+    start-immich = "sudo /run/current-system/sw/bin/start-immich";
   };
 }
