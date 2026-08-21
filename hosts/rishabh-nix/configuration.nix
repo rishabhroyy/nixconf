@@ -51,9 +51,28 @@ in
   # inbound guest traffic before this). With the real MAC now exclusively
   # the VM's, the router's existing DHCP reservation for 10.0.0.2 keeps
   # matching with no router-side changes and no static IP in Windows.
+  #
+  # networking.interfaces.enp41s0.macAddress did NOT apply this reliably in
+  # practice (verified live: enp41s0 still came up on its real MAC after a
+  # full reboot with that option set) -- ordering against bridge
+  # enslavement, most likely. An explicit oneshot doing the same down/
+  # set-address/up cycle that fixed it live works regardless of ordering
+  # (proven: it also works run manually against an already-enslaved port),
+  # so that's what's actually relied on here instead of the declarative
+  # option.
   networking.useDHCP = false;
   networking.interfaces.enp39s0.useDHCP = false;
-  networking.interfaces.enp41s0.macAddress = "16:5d:34:c1:14:5e";
+  systemd.services.set-enp41s0-mac = {
+    description = "Override enp41s0's MAC so win11's virtio-net can use the real one";
+    before = [ "network-addresses-br0.service" "network-link-enp41s0.service" ];
+    wantedBy = [ "multi-user.target" "network-addresses-br0.service" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      ${pkgs.iproute2}/bin/ip link set enp41s0 down
+      ${pkgs.iproute2}/bin/ip link set enp41s0 address 16:5d:34:c1:14:5e
+      ${pkgs.iproute2}/bin/ip link set enp41s0 up
+    '';
+  };
   networking.bridges.br0.interfaces = [ "enp41s0" ];
   networking.interfaces.br0 = {
     useDHCP = true;

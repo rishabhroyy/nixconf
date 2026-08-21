@@ -52,8 +52,12 @@ Current stable profile for the `win11` libvirt domain.
   win11's virtio-net MAC is the RTL8125's real hardware MAC
   (`14:5d:34:c1:14:5e`) -- this works because `enp41s0`'s own software MAC
   is deliberately overridden to a different, locally-administered address
-  (`16:5d:34:c1:14:5e`) in `configuration.nix`, specifically to free the
-  real MAC up for the VM. Without that override, the real MAC collides with
+  (`16:5d:34:c1:14:5e`) via `systemd.services.set-enp41s0-mac` in
+  `configuration.nix`, specifically to free the real MAC up for the VM (an
+  explicit oneshot doing `ip link set ... down/address/up`, not the
+  declarative `networking.interfaces.*.macAddress` option -- that option
+  did not reliably apply in practice, verified live). Without that
+  override, the real MAC collides with
   the bridge's automatic "permanent, local" fdb entry for `enp41s0`'s own
   address and silently blackholes all inbound guest traffic (learned the
   hard way: DHCP/ARP replies never reached the guest even though its
