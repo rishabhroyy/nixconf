@@ -173,14 +173,16 @@ $HYPERVCLOCK_TIMER
       <address type='pci' domain='0x0000' bus='0x07' slot='0x00' function='0x0'/>
     </hostdev>
 
-    <!-- 2.5Gbe Realtek NIC Passthrough (10ec:8125) -->
-    <!-- Mapped to 29:00.0 -->
-    <hostdev mode='subsystem' type='pci' managed='no'>
-      <source>
-        <address domain='0x0000' bus='0x29' slot='0x00' function='0x0'/>
-      </source>
-      <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
-    </hostdev>
+    <!-- 2.5GbE NIC (10ec:8125) is host-owned and bridged as br0 instead of
+         raw PCI passthrough, so NixOS and win11 can both use it at once.
+         MAC pinned to the RTL8125's real hardware MAC (read via ARP while
+         it was still passed through) so the router's existing DHCP
+         reservation for 10.0.0.2 keeps matching without any router change. -->
+    <interface type='bridge'>
+      <source bridge='br0'/>
+      <mac address='14:5d:34:c1:14:5e'/>
+      <model type='virtio'/>
+    </interface>
 
     <!-- Keep the guest memory layout static; no balloon device. -->
     <memballoon model='none'/>

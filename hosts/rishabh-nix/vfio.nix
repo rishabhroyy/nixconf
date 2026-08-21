@@ -3,7 +3,12 @@
 let
   # Dedicated passthrough devices bind to vfio-pci once during initrd and stay
   # there for the whole NixOS boot.
-  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "10ec:8125" "1b21:0612" ];
+  # 10ec:8125 (the 2.5GbE NIC) intentionally not in this list -- it's
+  # host-owned now, bridged as br0, and shared with the win11 guest over a
+  # virtio-net interface instead of raw PCI passthrough. See networking
+  # config in configuration.nix and the win11 domain's <interface> in
+  # win11-template.xml.
+  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "1b21:0612" ];
   win11VfioDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
@@ -11,14 +16,12 @@ let
     "0000:26:00.0"
     "0000:2a:00.1"
     "0000:2a:00.3"
-    "0000:29:00.0"
   ];
   win11EarlyBoundDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
     "0000:22:00.0"
     "0000:26:00.0"
-    "0000:29:00.0"
   ];
 in
 {
@@ -541,12 +544,6 @@ EOF
           exit 1
           ;;
       esac
-
-      # Force a fresh PHY link negotiation on the RTL8125 NIC to prevent it
-      # from booting stuck at 100Mbps instead of 2.5Gbps.
-      echo "Resetting RTL8125 NIC link."
-      echo 1 > /sys/bus/pci/devices/0000:29:00.0/reset 2>/dev/null || true
-      ${pkgs.coreutils}/bin/sleep 2
 
       # Dedicated devices are already bound to vfio-pci. Start the persistent
       # libvirt domain normally and exactly once.

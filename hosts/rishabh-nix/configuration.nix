@@ -28,9 +28,28 @@ in
 
   networking.hostName = "rishabh-nix";
 
-  # We are passing the 2.5G NIC natively to the VM via VFIO, so NixOS uses the 1G motherboard NIC.
-  # Enable global DHCP so NixOS automatically grabs an IP from your router on the 1G connection.
-  networking.useDHCP = true;
+  # The 2.5GbE NIC (10ec:8125, PCI 0000:29:00.0, enp41s0) is host-owned and
+  # bridged as br0 so NixOS and the win11 VM can both use it at once -- the
+  # VM gets a virtio-net interface on the same bridge instead of raw PCI
+  # passthrough (see win11-template.xml). br0's MAC is pinned to the old 1G
+  # NIC's MAC so the router's existing DHCP reservation for 10.0.0.3 keeps
+  # matching without touching the router. The 1G NIC (enp39s0) is unused now.
+  #
+  # enp41s0 is this board's predictable name for 0000:29:00.0 (bus 0x29 =
+  # 41 decimal) -- verify with `ip link` after the first boot with the NIC
+  # off vfio-pci, since it never had a chance to enumerate under that name
+  # while it was passed through.
+  networking.useDHCP = false;
+  networking.interfaces.enp39s0.useDHCP = false;
+  networking.bridges.br0.interfaces = [ "enp41s0" ];
+  networking.interfaces.br0 = {
+    useDHCP = true;
+    macAddress = "d8:bb:c1:42:9c:09";
+  };
+  # Physical NIC's own WoL flag -- this is what the machine's still-powered
+  # standby circuitry actually checks while fully off, independent of
+  # whatever OS last had the interface up.
+  networking.interfaces.enp41s0.wakeOnLan.enable = true;
 
   # Tailscale
   services.tailscale = {

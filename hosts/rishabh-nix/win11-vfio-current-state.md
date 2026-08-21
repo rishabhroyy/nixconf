@@ -44,7 +44,16 @@ Current stable profile for the `win11` libvirt domain.
   containers prefer the housekeeping CPUs on physical cores 0-3.
 - Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
 - KVM IOAPIC, nested virtualization, and AVIC.
-- VFIO passthrough for the configured GPU, storage, USB controllers, and NIC.
+- VFIO passthrough for the configured GPU, storage, and USB controllers.
+- The 2.5GbE NIC is host-owned (bridged as `br0`) instead of raw PCI
+  passthrough, so NixOS (`10.0.0.3`) and win11 (`10.0.0.2`, via a virtio-net
+  interface on the same bridge) share it concurrently. Both sides' MACs are
+  pinned to their original hardware MACs so the router's DHCP reservations
+  keep matching unchanged. Bare-metal Windows is unaffected either way -- it
+  never goes through NixOS/libvirt, so it always sees the NIC directly with
+  its native driver regardless of how NixOS is using it. WoL now needs to be
+  enabled on the host side (`networking.interfaces.enp41s0.wakeOnLan.enable`)
+  since Linux owns the physical device instead of Windows' driver.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.
 - Dedicated passthrough devices, including the physical boot NVMe, bind once to
