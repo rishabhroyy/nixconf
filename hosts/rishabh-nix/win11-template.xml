@@ -175,7 +175,7 @@ $HYPERVCLOCK_TIMER
 
     <!-- 2.5GbE NIC (10ec:8125) is host-owned and bridged as br0 instead of
          raw PCI passthrough, so NixOS and win11 can both use it at once.
-         win11 gets the RTL8125's real hardware MAC here -- this works
+         win11 gets the RTL8125's real hardware MAC here; this works
          (unlike an earlier attempt) because enp41s0's own software MAC is
          overridden to a different address in configuration.nix
          specifically to free this one up. Without that override, this
@@ -183,7 +183,7 @@ $HYPERVCLOCK_TIMER
          entry for enp41s0's own MAC and silently blackhole all inbound
          guest traffic (this happened; that's why the override exists).
          With the real MAC exclusively the VM's, the router's existing DHCP
-         reservation for 10.0.0.2 keeps matching -- baremetal Windows uses
+         reservation for 10.0.0.2 keeps matching; baremetal Windows uses
          the same real MAC directly (it never goes through NixOS/libvirt),
          and the two are never live on the network at the same time. -->
     <interface type='bridge'>
