@@ -46,13 +46,20 @@ Current stable profile for the `win11` libvirt domain.
 - KVM IOAPIC, nested virtualization, and AVIC.
 - VFIO passthrough for the configured GPU, storage, and USB controllers.
 - The 2.5GbE NIC is host-owned (bridged as `br0`) instead of raw PCI
-  passthrough, so NixOS (`10.0.0.3`) and win11 (`10.0.0.2`, via a virtio-net
-  interface on the same bridge) share it concurrently. Both sides' MACs are
-  pinned to their original hardware MACs so the router's DHCP reservations
-  keep matching unchanged. Bare-metal Windows is unaffected either way -- it
-  never goes through NixOS/libvirt, so it always sees the NIC directly with
-  its native driver regardless of how NixOS is using it. WoL now needs to be
-  enabled on the host side (`networking.interfaces.enp41s0.wakeOnLan.enable`)
+  passthrough, so NixOS (`10.0.0.3`, MAC cloned from the old 1G NIC, which is
+  no longer a live bridge member so this is safe) and win11 (via a
+  virtio-net interface on the same bridge) share it concurrently.
+  win11's virtio-net MAC is libvirt-generated, deliberately NOT cloned from
+  the physical RTL8125's own MAC -- that MAC now belongs to a live host
+  interface (`enp41s0`) that's itself a bridge member, so a cloned guest MAC
+  collides with the bridge's permanent local-port fdb entry and blackholes
+  all inbound guest traffic (learned the hard way: DHCP/ARP replies never
+  reached the guest even though its outbound broadcasts did). The guest gets
+  a static IP (`10.0.0.2`) configured directly in Windows instead of relying
+  on a router-side MAC reservation. Bare-metal Windows is unaffected either
+  way -- it never goes through NixOS/libvirt, so it always sees the NIC
+  directly with its native driver regardless of how NixOS is using it. WoL
+  is enabled host-side (`networking.interfaces.enp41s0.wakeOnLan.enable`)
   since Linux owns the physical device instead of Windows' driver.
 - Deterministic systemd-owned VM startup after the current XML and passthrough
   bindings are ready; libvirt's independent domain autostart is disabled.

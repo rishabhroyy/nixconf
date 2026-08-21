@@ -175,12 +175,15 @@ $HYPERVCLOCK_TIMER
 
     <!-- 2.5GbE NIC (10ec:8125) is host-owned and bridged as br0 instead of
          raw PCI passthrough, so NixOS and win11 can both use it at once.
-         MAC pinned to the RTL8125's real hardware MAC (read via ARP while
-         it was still passed through) so the router's existing DHCP
-         reservation for 10.0.0.2 keeps matching without any router change. -->
+         Deliberately NOT cloning the physical RTL8125's own MAC here: that
+         MAC now belongs to a live host interface (enp41s0) that's itself a
+         member of this same bridge, so a cloned guest MAC collides with the
+         bridge's permanent local-port fdb entry for enp41s0 and blackholes
+         all inbound guest traffic. Router no longer sees a fixed MAC for
+         this VM -- give the guest a static IP directly instead, doesn't
+         depend on the router's reservation. Let libvirt generate a MAC. -->
     <interface type='bridge'>
       <source bridge='br0'/>
-      <mac address='14:5d:34:c1:14:5e'/>
       <model type='virtio'/>
     </interface>
 
