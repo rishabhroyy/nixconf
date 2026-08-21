@@ -21,6 +21,12 @@
     <vcpupin vcpu='6' cpuset='7'/>
     <vcpupin vcpu='7' cpuset='15'/>
     <emulatorpin cpuset='0-3,8-11'/>
+    <!-- Same low-priority RT class as the vCPU threads. Without this the
+         emulator thread (which forwards every VFIO interrupt for the
+         passthrough GPU/NVMe/SATA/USB devices) is plain SCHED_OTHER and
+         queues behind whatever Docker container happens to be busy on the
+         same housekeeping cores, e.g. hokago-worker's ffmpeg sweeps. -->
+    <emulatorsched scheduler='rr' priority='1'/>
     <vcpusched vcpus='0-7' scheduler='rr' priority='1'/>
   </cputune>
   <os>

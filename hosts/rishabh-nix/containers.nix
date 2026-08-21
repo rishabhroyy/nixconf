@@ -8,9 +8,15 @@
   # Tailscale Sidecars and Services
   # Keep background services on the housekeeping CPUs while the
   # latency-sensitive CPU cores remain available to the Windows guest.
+  # --cpus=4 caps total container demand at half of the 8 housekeeping
+  # logical CPUs -- without it a single library-scan burst (hokago-worker's
+  # ffmpeg trickplay sweeps measured at 1236% across these 8 CPUs) can
+  # saturate the same cores QEMU's emulator thread and passthrough-device
+  # IRQs depend on, starving the VM even though its own isolated cores are
+  # untouched.
   virtualisation.oci-containers.containers = builtins.mapAttrs (_: container:
     container // {
-      extraOptions = (container.extraOptions or []) ++ [ "--cpuset-cpus=0-3,8-11" ];
+      extraOptions = (container.extraOptions or []) ++ [ "--cpuset-cpus=0-3,8-11" "--cpus=4" ];
     }
   ) {
     # ---------------------------------------------------------
