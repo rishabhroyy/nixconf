@@ -49,19 +49,20 @@ Current stable profile for the `win11` libvirt domain.
   passthrough, so NixOS (`10.0.0.3`, MAC cloned from the old 1G NIC, which is
   no longer a live bridge member so this is safe) and win11 (via a
   virtio-net interface on the same bridge) share it concurrently.
-  win11's virtio-net MAC is fixed at `16:5d:34:c1:14:5e` (the real RTL8125
-  MAC with the locally-administered bit set), deliberately NOT cloned as an
-  exact match -- the real MAC now belongs to a live host interface
-  (`enp41s0`) that's itself a bridge member, so a cloned guest MAC collides
-  with the bridge's permanent local-port fdb entry and blackholes all
-  inbound guest traffic (learned the hard way: DHCP/ARP replies never
-  reached the guest even though its outbound broadcasts did). Router has two
-  DHCP reservations to `10.0.0.2`, one per MAC -- baremetal's existing one on
-  the real MAC, plus a new one on `16:5d:34:c1:14:5e` for the VM. Only one is
-  ever live at a time since they're mutually exclusive boot modes of the
-  same box. Bare-metal Windows is unaffected either way -- it never goes
-  through NixOS/libvirt, so it always sees the NIC directly with its native
-  driver regardless of how NixOS is using it. WoL
+  win11's virtio-net MAC is the RTL8125's real hardware MAC
+  (`14:5d:34:c1:14:5e`) -- this works because `enp41s0`'s own software MAC
+  is deliberately overridden to a different, locally-administered address
+  (`16:5d:34:c1:14:5e`) in `configuration.nix`, specifically to free the
+  real MAC up for the VM. Without that override, the real MAC collides with
+  the bridge's automatic "permanent, local" fdb entry for `enp41s0`'s own
+  address and silently blackholes all inbound guest traffic (learned the
+  hard way: DHCP/ARP replies never reached the guest even though its
+  outbound broadcasts did). With the real MAC exclusively the VM's, the
+  router's existing DHCP reservation for `10.0.0.2` keeps matching with no
+  router-side changes and no static IP in Windows. Bare-metal Windows uses
+  the same real MAC directly -- it never goes through NixOS/libvirt, so it
+  always sees the NIC natively regardless of how NixOS is using it, and the
+  two are never live on the network at the same time. WoL
   is enabled host-side (`networking.interfaces.enp41s0.wakeOnLan.enable`)
   since Linux owns the physical device instead of Windows' driver.
 - Deterministic systemd-owned VM startup after the current XML and passthrough

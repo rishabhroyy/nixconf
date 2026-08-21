@@ -39,16 +39,29 @@ in
   # 41 decimal) -- verify with `ip link` after the first boot with the NIC
   # off vfio-pci, since it never had a chance to enumerate under that name
   # while it was passed through.
+  #
+  # enp41s0's own software MAC is deliberately overridden away from its real
+  # hardware MAC (14:5d:34:c1:14:5e -> 16:5d:34:c1:14:5e, locally-
+  # administered bit set). A bridge slave port with an IP-less, DHCP-less
+  # role never actually transmits under its own MAC, so this override is
+  # invisible on the wire -- but it frees up the real MAC so win11's
+  # virtio-net interface (win11-template.xml) can use it directly, without
+  # colliding with the bridge's automatic "permanent, local" fdb entry for
+  # enp41s0's own address (that collision is what silently blackholed all
+  # inbound guest traffic before this). With the real MAC now exclusively
+  # the VM's, the router's existing DHCP reservation for 10.0.0.2 keeps
+  # matching with no router-side changes and no static IP in Windows.
   networking.useDHCP = false;
   networking.interfaces.enp39s0.useDHCP = false;
+  networking.interfaces.enp41s0.macAddress = "16:5d:34:c1:14:5e";
   networking.bridges.br0.interfaces = [ "enp41s0" ];
   networking.interfaces.br0 = {
     useDHCP = true;
     macAddress = "d8:bb:c1:42:9c:09";
   };
-  # Physical NIC's own WoL flag -- this is what the machine's still-powered
-  # standby circuitry actually checks while fully off, independent of
-  # whatever OS last had the interface up.
+  # WoL is matched against the NIC's burned-in firmware MAC while the
+  # machine is fully off, independent of any software MAC override applied
+  # above while the OS is running.
   networking.interfaces.enp41s0.wakeOnLan.enable = true;
 
   # Tailscale

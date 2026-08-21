@@ -175,20 +175,20 @@ $HYPERVCLOCK_TIMER
 
     <!-- 2.5GbE NIC (10ec:8125) is host-owned and bridged as br0 instead of
          raw PCI passthrough, so NixOS and win11 can both use it at once.
-         Deliberately NOT cloning the physical RTL8125's own MAC (14:5d:34:
-         c1:14:5e) here: that MAC now belongs to a live host interface
-         (enp41s0) that's itself a member of this same bridge, so a cloned
-         guest MAC collides with the bridge's permanent local-port fdb entry
-         for enp41s0 and blackholes all inbound guest traffic.
-         Fixed MAC below is the real one with the locally-administered bit
-         set (0x14 -> 0x16) so it's distinct from the physical NIC but still
-         recognizable, and stable enough to add as a second router-side DHCP
-         reservation -> 10.0.0.2 (baremetal keeps its own existing
-         reservation on the real MAC; only one of the two is ever live at a
-         time since they're mutually exclusive boot modes of the same box). -->
+         win11 gets the RTL8125's real hardware MAC here -- this works
+         (unlike an earlier attempt) because enp41s0's own software MAC is
+         overridden to a different address in configuration.nix
+         specifically to free this one up. Without that override, this
+         would collide with the bridge's automatic "permanent, local" fdb
+         entry for enp41s0's own MAC and silently blackhole all inbound
+         guest traffic (this happened; that's why the override exists).
+         With the real MAC exclusively the VM's, the router's existing DHCP
+         reservation for 10.0.0.2 keeps matching -- baremetal Windows uses
+         the same real MAC directly (it never goes through NixOS/libvirt),
+         and the two are never live on the network at the same time. -->
     <interface type='bridge'>
       <source bridge='br0'/>
-      <mac address='16:5d:34:c1:14:5e'/>
+      <mac address='14:5d:34:c1:14:5e'/>
       <model type='virtio'/>
     </interface>
 
