@@ -39,6 +39,16 @@ in
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
+    # Default halt_poll_ns (200us) isn't enough headroom for the isolated
+    # cores' bursty HLT pattern under amd-pstate-epp: on nohz_full/isolcpus
+    # cores the guest's frequent short HLTs were dropping straight into the
+    # host's C2 idle state before the vCPU thread's activity read as "busy",
+    # which starved the autonomous boost algorithm and pinned cores 4-7/12-15
+    # at ~1.75GHz (their floor) instead of boosting toward 4.85GHz. A longer
+    # busy-poll window keeps short guest idle gaps from reaching C-states at
+    # all. Costs a bit of idle power on these cores; they're dedicated to the
+    # VM anyway.
+    "kvm.halt_poll_ns=500000"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
     "hugepages=12"
@@ -57,6 +67,30 @@ in
     "vfio"
     "vfio_iommu_type1"
   ];
+
+  # Even with kvm.halt_poll_ns raised above, disable the C2 idle state
+  # outright on the isolated cores. C2 has an 18us entry latency and a 36us
+  # break-even residency here; the guest's HLT pattern is bursty enough that
+  # cores 4-7/12-15 were spending effectively all their time parked in C2
+  # between wakeups, which kept the amd-pstate-epp boost algorithm from ever
+  # seeing sustained load and pinned them at their ~1.75GHz floor. Forcing
+  # these cores no deeper than C1 (1us latency) is what actually let them
+  # boost. Cores 0-3/8-11 keep normal idle behavior for power savings.
+  systemd.services.disable-win11-core-cstates = {
+    description = "Disable deep C-states on the isolated win11 vCPU cores";
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      for CPU in 4 5 6 7 12 13 14 15; do
+        for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
+          NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
+          if [ "$NAME" != "POLL" ] && [ "$NAME" != "C1" ]; then
+            echo 1 > "$STATE/disable"
+          fi
+        done
+      done
+    '';
+  };
 
   # Virtualization settings
   virtualisation.libvirtd = {
@@ -729,6 +763,21 @@ EOF
       echo "legacy-facp-dsdt-injection=removed"
       ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
+
+      echo
+      echo "== CPU boost / idle states (isolated cores) =="
+      ${pkgs.coreutils}/bin/printf 'kvm.halt_poll_ns='
+      ${pkgs.coreutils}/bin/cat /sys/module/kvm/parameters/halt_poll_ns 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
+      for CPU in 4 5 6 7 12 13 14 15; do
+        FREQ="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_cur_freq 2>/dev/null || echo unknown)"
+        ${pkgs.coreutils}/bin/printf 'cpu%s scaling_cur_freq=%s ' "$CPU" "$FREQ"
+        for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
+          NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
+          DISABLED="$(${pkgs.coreutils}/bin/cat "$STATE/disable" 2>/dev/null || true)"
+          ${pkgs.coreutils}/bin/printf '%s:disable=%s ' "$NAME" "$DISABLED"
+        done
+        echo
+      done
 
       echo
       echo "== CPU affinity =="

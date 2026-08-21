@@ -21,6 +21,16 @@ Current stable profile for the `win11` libvirt domain.
   round-robin scheduling; guest cores 4-7 and host work retain normal
   scheduling.
 - KVM poll-control reduces scheduler round trips for short guest wakeups.
+- `kvm.halt_poll_ns=500000` and the C2 idle state disabled on cores 4-7/12-15
+  (`disable-win11-core-cstates.service`). Measured live: those cores were
+  spending effectively all their time parked in C2 (18us entry latency, 36us
+  break-even) between the guest's bursty HLTs, which kept amd-pstate-epp's
+  autonomous boost algorithm from ever seeing sustained load -- they were
+  pinned at their ~1.75GHz floor instead of boosting toward 4.85GHz,
+  regardless of the "performance" governor already being set. This, not any
+  of the removed identity spoofing, was the actual cause of persistent VM
+  lagginess. Fix costs a bit of idle power/heat on the isolated cores only;
+  cores 0-3/8-11 keep normal idle behavior.
 - Offloaded RCU callbacks use polling so they do not repeatedly wake isolated
   guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
