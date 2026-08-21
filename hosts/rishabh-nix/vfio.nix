@@ -70,12 +70,9 @@ in
 
   # Even with kvm.halt_poll_ns raised above, disable the C2 idle state
   # outright on the isolated cores. C2 has an 18us entry latency and a 36us
-  # break-even residency here; the guest's HLT pattern is bursty enough that
-  # cores 4-7/12-15 were spending effectively all their time parked in C2
-  # between wakeups, which kept the amd-pstate-epp boost algorithm from ever
-  # seeing sustained load and pinned them at their ~1.75GHz floor. Forcing
-  # these cores no deeper than C1 (1us latency) is what actually let them
-  # boost. Cores 0-3/8-11 keep normal idle behavior for power savings.
+  # break-even residency here, so forcing these cores no deeper than C1
+  # (1us latency) keeps every wakeup cheap. Cores 0-3/8-11 keep normal idle
+  # behavior for power savings.
   systemd.services.disable-win11-core-cstates = {
     description = "Disable deep C-states on the isolated win11 vCPU cores";
     wantedBy = [ "multi-user.target" ];
@@ -88,6 +85,32 @@ in
             echo 1 > "$STATE/disable"
           fi
         done
+      done
+    '';
+  };
+
+  # The actual cause of the isolated cores sitting at their ~1.75GHz P-state
+  # floor even under 90%+ measured vCPU load: amd-pstate-epp's "performance"
+  # governor requests a boosted P-state via a callback that's re-applied on
+  # every scheduler tick. nohz_full on cores 4-7/12-15 (needed for the VM's
+  # latency isolation) stops that tick, so the boost request only gets
+  # applied once at boot -- before the VM has any load -- and is never
+  # refreshed afterward. cpupower/scaling_governor="performance" alone can't
+  # fix this; it depends on the same tick.
+  #
+  # Fix: collapse each isolated core's allowed frequency range to a single
+  # point at its max (scaling_min_freq = scaling_max_freq). That's a static
+  # hardware CPPC request, not a per-tick one, so it survives with no tick to
+  # refresh it. These cores are 100% dedicated to the VM, so there's no
+  # power-saving idle-clock behavior worth preserving here.
+  systemd.services.pin-win11-core-max-freq = {
+    description = "Pin the isolated win11 vCPU cores to their max P-state";
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig.Type = "oneshot";
+    script = ''
+      for CPU in 4 5 6 7 12 13 14 15; do
+        MAX="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_max_freq)"
+        echo "$MAX" > /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_min_freq
       done
     '';
   };
@@ -770,7 +793,8 @@ EOF
       ${pkgs.coreutils}/bin/cat /sys/module/kvm/parameters/halt_poll_ns 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       for CPU in 4 5 6 7 12 13 14 15; do
         FREQ="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_cur_freq 2>/dev/null || echo unknown)"
-        ${pkgs.coreutils}/bin/printf 'cpu%s scaling_cur_freq=%s ' "$CPU" "$FREQ"
+        MINFREQ="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_min_freq 2>/dev/null || echo unknown)"
+        ${pkgs.coreutils}/bin/printf 'cpu%s scaling_cur_freq=%s scaling_min_freq=%s ' "$CPU" "$FREQ" "$MINFREQ"
         for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
           NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
           DISABLED="$(${pkgs.coreutils}/bin/cat "$STATE/disable" 2>/dev/null || true)"

@@ -22,15 +22,22 @@ Current stable profile for the `win11` libvirt domain.
   scheduling.
 - KVM poll-control reduces scheduler round trips for short guest wakeups.
 - `kvm.halt_poll_ns=500000` and the C2 idle state disabled on cores 4-7/12-15
-  (`disable-win11-core-cstates.service`). Measured live: those cores were
-  spending effectively all their time parked in C2 (18us entry latency, 36us
-  break-even) between the guest's bursty HLTs, which kept amd-pstate-epp's
-  autonomous boost algorithm from ever seeing sustained load -- they were
-  pinned at their ~1.75GHz floor instead of boosting toward 4.85GHz,
-  regardless of the "performance" governor already being set. This, not any
-  of the removed identity spoofing, was the actual cause of persistent VM
-  lagginess. Fix costs a bit of idle power/heat on the isolated cores only;
-  cores 0-3/8-11 keep normal idle behavior.
+  (`disable-win11-core-cstates.service`) to keep guest wakeups cheap.
+- Isolated cores 4-7/12-15 pinned to their max P-state
+  (`pin-win11-core-max-freq.service`, `scaling_min_freq = scaling_max_freq`).
+  Measured live under actual 90%+ vCPU load: these cores sat locked at their
+  ~1.75GHz floor the whole time, versus 4.2-4.8GHz on cores 0-3 under lighter
+  load, despite the "performance" governor already being set on both. Root
+  cause: amd-pstate-epp's boost request is re-applied on every scheduler
+  tick, and `nohz_full` on the isolated cores (required for the VM's latency
+  isolation) stops that tick -- so the boost request only ever got applied
+  once at boot, before the VM had any load, and was never refreshed. Pinning
+  the allowed frequency range to a single point is a static hardware request
+  that doesn't need a tick to stay in effect. This, not the C-state residency
+  fix above or any of the removed identity spoofing, was the actual cause of
+  persistent VM lagginess -- the dedicated cores were running at roughly a
+  third of their available clock regardless of load. These cores are 100%
+  dedicated to the VM, so there's no idle-clock power saving worth keeping.
 - Offloaded RCU callbacks use polling so they do not repeatedly wake isolated
   guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
