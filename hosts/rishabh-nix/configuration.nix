@@ -298,7 +298,13 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/hokago/config 0755 root root -"
     "d /var/lib/hokago/db 0755 root root -"
-    "d /var/lib/hokago/cache/valkey 0755 root root -"
+    # valkey/valkey:8-bookworm runs as 999:valkey and BGSAVEs to /data/dump.rdb
+    # (bind-mounted from /var/lib/hokago/cache/valkey). root:root 0755 causes
+    # "Failed opening temp-1702.rdb: Permission denied" + MISCONF stop-writes
+    # that blocks BullMQ (bull:artwork/metadata). Queue is ephemeral — no
+    # persistence needed — but fix perms anyway and disable RDB below.
+    "d /var/lib/hokago/cache/valkey 0750 999 999 -"
+    "Z /var/lib/hokago/cache/valkey 0750 999 999 -"
     "d /var/lib/tailscale-immich 0755 root root -"
     "d /var/lib/tailscale-hokago 0755 root root -"
     "d /var/lib/tailscale-portainer 0755 root root -"
@@ -325,6 +331,17 @@ in
   systemd.services.docker-hokago-worker = lib.mkIf (!recoveryMode) {
     after = [ "mnt-data4.mount" ];
     requires = [ "mnt-data4.mount" ];
+  };
+
+  # Valkey runs as 999:valkey. tmpfiles Z fixes perms on boot, but a
+  # nixos-rebuild that only recreates the dir as root:root (fresh cache)
+  # needs an immediate chown before the container starts, otherwise the
+  # first BGSAVE fails and stop-writes-on-bgsave-error=y blocks BullMQ.
+  systemd.services.docker-hokago-valkey = lib.mkIf (!recoveryMode) {
+    serviceConfig.ExecStartPre = [
+      "-${pkgs.coreutils}/bin/chown 999:999 /var/lib/hokago/cache/valkey"
+      "-${pkgs.coreutils}/bin/chmod 0750 /var/lib/hokago/cache/valkey"
+    ];
   };
 
   # ---------------------------------------------------------

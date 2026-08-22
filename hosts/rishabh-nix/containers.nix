@@ -156,6 +156,19 @@
       volumes = [
         "/var/lib/hokago/cache/valkey:/data"
       ];
+      # BullMQ queue is ephemeral — no RDB/AOF persistence needed.
+      # Default "save 3600 1" + "stop-writes-on-bgsave-error yes" forks
+      # BGSAVE to /data/dump.rdb; with wrong host perms that MISCONFs and
+      # blocks all writes (bull:artwork/metadata). Disable persistence and
+      # ensure writes are never blocked even if a future BGSAVE fails.
+      cmd = [
+        "--save"
+        ""
+        "--appendonly"
+        "no"
+        "--stop-writes-on-bgsave-error"
+        "no"
+      ];
     };
 
     # Migrations run before boot (postgres has no tables on first start) --
