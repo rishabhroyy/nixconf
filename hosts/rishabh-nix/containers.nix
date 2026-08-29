@@ -195,7 +195,7 @@
         "/var/lib/hokago/config:/config"
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
-        "/mnt/data4/YouTube/Anime:/media/anime:ro"
+        "/mnt/data4/YouTube/Anime:/media/anime:rw"
       ];
     };
 
@@ -216,7 +216,7 @@
         "/var/lib/hokago/config:/config"
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
-        "/mnt/data4/YouTube/Anime:/media/anime:ro"
+        "/mnt/data4/YouTube/Anime:/media/anime:rw"
       ];
     };
 
