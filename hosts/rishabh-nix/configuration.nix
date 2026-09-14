@@ -11,6 +11,7 @@ in
     ./containers.nix
     ./samba-ntfs.nix
     ./vfio.nix
+    ./sandbox-podman.nix
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
@@ -135,6 +136,7 @@ in
   sops.secrets.tailscale_auth_key = {};
   sops.secrets.immich_db_password = {};
   sops.secrets.hokago_db_password = {};
+  sops.secrets.hokago_acquire_key = {};
   sops.secrets.copyparty_password = {};
   sops.secrets.signal_phone_number = {};
 
@@ -195,6 +197,7 @@ in
   sops.templates."hokago.env".content = ''
     POSTGRES_PASSWORD=${config.sops.placeholder.hokago_db_password}
     DATABASE_URL=postgresql://hokago:${config.sops.placeholder.hokago_db_password}@127.0.0.1:5432/hokago
+    HOKAGO_ACQUIRE_KEY=${config.sops.placeholder.hokago_acquire_key}
   '';
 
   sops.templates."copyparty.conf" = {
@@ -287,9 +290,21 @@ in
     # Hide the 1TB SATA SSD (Game Drive) from Linux so it is strictly for the Windows VM
     # The ID ata-SanDisk_SSD_PLUS_1000GB_221306A0095A is used in the QEMU XML.
     KERNEL=="sd*", SUBSYSTEM=="block", ENV{ID_SERIAL}=="*SanDisk_SSD_PLUS_1000GB_221306A0095A*", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
-    
+
     # Fallback protection if the dedicated NVMe ever fails to bind to vfio-pci.
     KERNEL=="nvme*", SUBSYSTEM=="block", ATTRS{model}=="Samsung SSD 980 PRO 1TB", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
+
+    # SATA Link Power Management workaround (4TB WD40EZAZ, /mnt/data4): this
+    # drive's ata port was hard-resetting every ~30s (dmesg: "ata6: hard
+    # resetting link" on a loop for hours). Default med_power_with_dipm puts
+    # the PHY into Partial/Slumber between accesses; on this AMD FCH SATA
+    # controller the PHY doesn't wake cleanly from that, forcing a hard
+    # reset to recover. libata's own error-recovery had already stepped the
+    # negotiated speed down to Gen1/1.5Gbps trying to find something stable
+    # -- it was never the cable or the drive. Matched by driver (ahci)
+    # rather than a host number, since host/ata numbering isn't guaranteed
+    # stable across boots.
+    ACTION=="add", SUBSYSTEM=="scsi_host", DRIVERS=="ahci", ATTR{link_power_management_policy}="max_performance"
   '';
 
   # ---------------------------------------------------------
@@ -349,12 +364,21 @@ in
   # ---------------------------------------------------------
   system.autoUpgrade = {
     enable = lib.mkDefault (!recoveryMode);
-    flake = "github:rishabhroyy/nixconf";
+    flake = "/etc/nixos/nixconf#rishabh-nix";
     operation = "switch";
     allowReboot = false; # Never randomly restart the host
     dates = "04:00";
     randomizedDelaySec = "45min";
   };
+
+  # keep the local checkout (used by autoUpgrade above and the nix-deploy
+  # alias) in sync so manual rebuilds never build from a stale flake.lock
+  systemd.services.nixos-upgrade.preStart = ''
+    ${pkgs.git}/bin/git -C /etc/nixos/nixconf pull --ff-only || {
+      echo "nixos-upgrade: could not fast-forward /etc/nixos/nixconf -- skipping tonight's upgrade" >&2
+      exit 1
+    }
+  '';
 
   environment.systemPackages = with pkgs; [
     # Basic Utilities

@@ -126,8 +126,11 @@
         "--cap-add=NET_ADMIN"
         "--cap-add=NET_RAW"
       ];
-      # Map the Hokago port to the host via the Tailscale sidecar
-      ports = [ "3211:3000" ];
+      # Loopback-only -- 127.0.0.1, never 0.0.0.0 or the LAN IP. A
+      # narrower binding than routing through the Tailscale sidecar
+      # below: nothing running directly on this host needs to leave the
+      # machine to reach a container running on it.
+      ports = [ "127.0.0.1:3211:3000" ];
     };
 
     hokago-postgres = {

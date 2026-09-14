@@ -143,6 +143,28 @@
   # i.e. /home/rishabh/.hermes, which is already persistent (the /home
   # bind mount above). Nothing further needed for persistence.
 
+  # `hermes gateway install` (the CLI's own installer, run once manually)
+  # writes ~/.config/systemd/user/hermes-gateway.service with the *current*
+  # hermes-agent-env store path baked into ExecStart/PATH/VIRTUAL_ENV. That
+  # path isn't a GC root, so the next rebuild that bumps the hermes-agent
+  # flake input orphans it, and once GC reclaims the old store path the
+  # gateway crash-loops forever on 203/EXEC (exactly what happened Sep 2026).
+  # Re-run the installer on every boot so it's always regenerated against
+  # whatever's live -- self-healing, and entirely inside this guest (the
+  # host never runs or knows about hermes). --accept-hooks avoids a TTY
+  # prompt with no TTY to answer it; Before= keeps this ahead of the gateway
+  # unit it rewrites so the fixed version is what actually starts.
+  systemd.user.services.hermes-gateway-repair = {
+    description = "Repair Hermes gateway systemd unit against current Nix store paths";
+    after = [ "network-online.target" ];
+    before = [ "hermes-gateway.service" ];
+    wantedBy = [ "default.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = "/run/current-system/sw/bin/hermes --accept-hooks gateway install --force --start-now --start-on-login";
+    };
+  };
+
   # ponytail: baseline coding toolchain -- agent has nothing to build/run
   # projects with otherwise. Extend here (declaratively) as needed; agent
   # can also self-serve extra system packages at runtime via `nix profile
