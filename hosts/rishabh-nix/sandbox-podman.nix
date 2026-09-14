@@ -27,7 +27,7 @@ let
       local -a hdr_args=()
       while IFS= read -r h; do hdr_args+=(-H "$h"); done < <(${pkgs.jq}/bin/jq -r '.headers // {} | to_entries[] | "\(.key): \(.value)"' "$path")
       local resp status
-      resp="$(${pkgs.curl}/bin/curl -s --max-time 10 -w $'\n''%{http_code}' -X "$method" "$url" "''${hdr_args[@]}" ''${body:+-d "$body"} 2>&1)" \
+      resp="$(${pkgs.curl}/bin/curl -s --max-time 10 -w $'\n%{http_code}' -X "$method" "$url" "''${hdr_args[@]}" ''${body:+-d "$body"} 2>&1)" \
         || { echo "run_http_hook: $method $url -- could not connect (''${resp:-no output})" >&2; return 1; }
       status="''${resp##*$'\n'}"
       if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
