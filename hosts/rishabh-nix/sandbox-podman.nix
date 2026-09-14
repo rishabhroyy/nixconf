@@ -75,6 +75,12 @@ in
     home = "/var/lib/svc-sandbox";
     hashedPassword = "!";
     shell = "${pkgs.shadow}/bin/nologin";
+    # Invoked via runuser, never a real login -- without lingering there's
+    # no systemd user session or D-Bus bus for this account at all, which
+    # rootless podman's network backend (netavark/aardvark-dns) hard-fails
+    # without, not just degrades gracefully like it does for the cgroup
+    # manager choice.
+    linger = true;
   };
 
   # sops-nix fails activation on a missing key, so all five must exist --
