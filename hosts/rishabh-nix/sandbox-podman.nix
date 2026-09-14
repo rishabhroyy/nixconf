@@ -39,6 +39,12 @@ let
     # Removes the running stack and its scratch dir entirely. Safe to call
     # when there's nothing to remove. $HOME_DIR is set by the caller.
     teardown_stack() {
+      # runuser doesn't change directory, so podman/podman-compose below
+      # would otherwise inherit whatever directory this script itself was
+      # invoked from (e.g. an interactive shell's $HOME) -- svc-sandbox
+      # has no permission to even enter that, which fails every podman
+      # call with "cannot chdir ... Permission denied", not just this one.
+      cd "$HOME_DIR"
       if ${pkgs.util-linux}/bin/mountpoint -q "$HOME_DIR"; then
         ${pkgs.coreutils}/bin/timeout 30 ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" down -v --rmi all >/dev/null 2>&1 || true
         ${pkgs.util-linux}/bin/umount "$HOME_DIR" 2>/dev/null || ${pkgs.util-linux}/bin/umount -l "$HOME_DIR" || true
@@ -124,6 +130,9 @@ in
       # resolved before the syscall, and not every util-linux version
       # resolves symbolic names there reliably.
       ${pkgs.util-linux}/bin/mount -t tmpfs -o size=4G,mode=0700,uid=$POD_UID,gid=$POD_GID tmpfs "$HOME_DIR"
+      # Re-anchor here: teardown_stack's own cd (just above) now points at
+      # the pre-mount directory this tmpfs just shadowed, not the fresh one.
+      cd "$HOME_DIR"
 
       ${pkgs.coreutils}/bin/install -m 0600 -o svc-sandbox -g users ${config.sops.secrets.sandbox_stack_blob.path} "$HOME_DIR/pod.yaml"
       ${pkgs.coreutils}/bin/install -m 0600 -o svc-sandbox -g users ${config.sops.secrets.sandbox_stack_app_src.path} "$HOME_DIR/app.js"
@@ -135,18 +144,22 @@ in
       # The compose file's first-listed service, whatever it's named --
       # brought up alone and waited on before anything else, rather than
       # trusting compose's own depends_on/condition to enforce that.
+      # A failed command inside an if/|| condition doesn't trip the ERR trap
+      # (that's specifically exempted under set -e) -- everything below that
+      # can fail after the mount/secret-install above calls teardown directly
+      # instead of a bare exit, so cleanup isn't skipped on these paths too.
       PRIMARY="$(pc config --services 2>/dev/null | ${pkgs.coreutils}/bin/head -1)"
-      [ -n "$PRIMARY" ] || { echo "sandbox-up: could not read any service from the compose file" >&2; exit 1; }
+      [ -n "$PRIMARY" ] || { echo "sandbox-up: could not read any service from the compose file" >&2; teardown; }
       if ! pc up -d "$PRIMARY"; then
         echo "sandbox-up: could not start $PRIMARY -- check the compose file and image references" >&2
-        exit 1
+        teardown
       fi
       primary_ok=0
       for i in $(${pkgs.coreutils}/bin/seq 1 30); do
         [ "$(p inspect --format '{{.State.Health.Status}}' "$PRIMARY" 2>/dev/null)" = "healthy" ] && { primary_ok=1; break; }
         sleep 1
       done
-      [ "$primary_ok" = "1" ] || { echo "sandbox-up: $PRIMARY never became healthy (check its own logs: podman logs $PRIMARY)" >&2; exit 1; }
+      [ "$primary_ok" = "1" ] || { echo "sandbox-up: $PRIMARY never became healthy (check its own logs: podman logs $PRIMARY)" >&2; teardown; }
 
       # --no-recreate: without it this can tear down and rebuild the primary
       # just waited on above, restarting its network namespace out from
