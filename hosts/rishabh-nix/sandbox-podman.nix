@@ -98,7 +98,7 @@ in
       HOME_DIR=/var/lib/svc-sandbox
       LOCK=/run/sandbox.lock
       POD_UID=$(${pkgs.coreutils}/bin/id -u svc-sandbox)
-      POD_GID=$(${pkgs.coreutils}/bin/getent group users | ${pkgs.coreutils}/bin/cut -d: -f3)
+      POD_GID=$(${pkgs.glibc.getent}/bin/getent group users | ${pkgs.coreutils}/bin/cut -d: -f3)
       export XDG_RUNTIME_DIR=/run/user/$POD_UID
 
       exec 9>"$LOCK"
