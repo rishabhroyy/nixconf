@@ -226,7 +226,16 @@ in
 
       echo "sandbox-down: removed. verifying..."
       cd /tmp   # svc-sandbox can't be entered from here either -- same reason as teardown_stack's own cd
-      remaining="$(${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman ps -a --format '{{.Names}}' 2>&1)"
+      # Under set -e this assignment (unlike an if/||-condition use of the
+      # same command) DOES abort the script on failure -- fall back to a
+      # value that still prints instead of skipping both checks below on
+      # some unrelated rootless-podman hiccup.
+      # stderr intentionally left alone here (not merged in) -- podman can
+      # print benign warnings on a perfectly successful, empty ps, and
+      # merging those into $remaining would misreport a clean teardown as
+      # "containers still present: <warning text>".
+      remaining="$(${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman ps -a --format '{{.Names}}')" \
+        || remaining="(could not check -- podman ps itself failed)"
       if [ -n "$remaining" ]; then
         echo "sandbox-down: WARNING -- containers still present: $remaining" >&2
       else
