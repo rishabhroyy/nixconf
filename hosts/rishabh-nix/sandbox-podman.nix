@@ -46,7 +46,11 @@ let
       # call with "cannot chdir ... Permission denied", not just this one.
       cd "$HOME_DIR"
       if ${pkgs.util-linux}/bin/mountpoint -q "$HOME_DIR"; then
-        ${pkgs.coreutils}/bin/timeout 30 ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" down -v --rmi all >/dev/null 2>&1 || true
+        # Subshell closes the lock fd before podman-compose runs -- without
+        # this, conmon (podman's per-container monitor, which deliberately
+        # outlives the command that started it) inherits it too, and the
+        # lock never frees for as long as any container it started stays up.
+        ( exec 9>&- 2>/dev/null; ${pkgs.coreutils}/bin/timeout 30 ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" down -v --rmi all >/dev/null 2>&1 ) || true
         ${pkgs.util-linux}/bin/umount "$HOME_DIR" 2>/dev/null || ${pkgs.util-linux}/bin/umount -l "$HOME_DIR" || true
       fi
       ${pkgs.coreutils}/bin/install -d -m 0700 -o svc-sandbox -g users "$HOME_DIR"
@@ -144,8 +148,13 @@ in
       ${pkgs.coreutils}/bin/install -m 0600 -o svc-sandbox -g users ${config.sops.secrets.sandbox_stack_app_src.path} "$HOME_DIR/app.js"
       ${pkgs.coreutils}/bin/install -m 0700 -o svc-sandbox -g users ${config.sops.secrets.sandbox_stack_check.path} "$HOME_DIR/check.sh"
 
-      p() { ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman "$@"; }
-      pc() { ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" "$@"; }
+      # Subshells close the lock fd before podman/podman-compose run -- see
+      # the matching comment in teardown_stack above. `up -d` is the one
+      # that actually matters (it starts conmon, which persists for the
+      # container's whole lifetime), but every call goes through the same
+      # two helpers, so closing it here covers all of them uniformly.
+      p() { ( exec 9>&- 2>/dev/null; ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman "$@" ); }
+      pc() { ( exec 9>&- 2>/dev/null; ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" "$@" ); }
 
       # The compose file's first-listed service, whatever it's named --
       # brought up alone and waited on before anything else, rather than
@@ -203,7 +212,19 @@ in
       run_http_hook ${config.sops.secrets.sandbox_stack_on_down.path} || true
       teardown_stack
 
-      echo "sandbox-down: removed."
+      echo "sandbox-down: removed. verifying..."
+      cd /tmp   # svc-sandbox can't be entered from here either -- same reason as teardown_stack's own cd
+      remaining="$(${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman ps -a --format '{{.Names}}' 2>&1)"
+      if [ -n "$remaining" ]; then
+        echo "sandbox-down: WARNING -- containers still present: $remaining" >&2
+      else
+        echo "sandbox-down: confirmed -- no containers remain"
+      fi
+      if ${pkgs.util-linux}/bin/mountpoint -q "$HOME_DIR"; then
+        echo "sandbox-down: WARNING -- $HOME_DIR is still mounted" >&2
+      else
+        echo "sandbox-down: confirmed -- $HOME_DIR is not mounted (tmpfs gone)"
+      fi
     '')
   ];
 
