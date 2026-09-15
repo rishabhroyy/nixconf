@@ -73,6 +73,18 @@ in
   # configured as default.
   virtualisation.containers.containersConf.settings.network.default_rootless_network_cmd = "slirp4netns";
 
+  # hokago's own containers (Docker) reach this stack's published app port
+  # to register/health-check it (see sandbox_stack_on_ready in sops). A
+  # connection made by the host itself to that same address is treated as
+  # loopback-equivalent (both ends are locally owned) and never hits this
+  # rule at all -- but a real container on docker0 genuinely traverses that
+  # interface, and NixOS's firewall drops new inbound connections on any
+  # interface with no explicit allow, docker0 included. Scoped to docker0
+  # and this one port only: no route, no trustedInterfaces, nothing that
+  # touches podman's own interfaces -- the sandbox still has no path
+  # toward hokago or its tailscale sidecar in the other direction.
+  networking.firewall.interfaces."docker0".allowedTCPPorts = [ 8181 ];
+
   users.users.svc-sandbox = {
     isNormalUser = true;
     createHome = true;
