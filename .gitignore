@@ -9,3 +9,6 @@ result-*
 **/.nixos-test-history
 qemu-vmcall-patch/
 .DS_Store
+
+sandbox-setup
+sandbox-setup/**
