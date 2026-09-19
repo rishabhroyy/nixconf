@@ -290,17 +290,27 @@ in
       # hostname closes that: a spoofed IP fails certificate validation and
       # curl reports nothing, so nothing gets added for it.
       #
-      # -4 is load-bearing, not a style choice: most of these hostnames
+      # -4 is load-bearing, not a style choice: several of these hostnames
       # publish AAAA records, this host has real working IPv6, and curl's
-      # default happy-eyeballs behavior does pick the v6 address in
-      # practice (confirmed directly against registry-1.docker.io). `iptables`
-      # (as opposed to `ip6tables`) rejects a v6 address outright, and under
-      # this script's `set -e` that would abort and tear down the whole
-      # stack -- not a rare edge case, the reproducible common case on this
-      # host. IPv6 is unconditionally blocked for this uid anyway (see the
-      # ip6tables rule above), so there's nothing to gain from ever
-      # preferring it here.
-      for reg_host in ghcr.io pkg-containers.githubusercontent.com registry-1.docker.io auth.docker.io production.cloudflare.docker.com; do
+      # default happy-eyeballs behavior does pick a v6 address in practice
+      # on this host. `iptables` (as opposed to `ip6tables`) rejects a v6
+      # address outright, and under this script's `set -e` that would abort
+      # and tear down the whole stack. IPv6 is unconditionally blocked for
+      # this uid anyway (see the ip6tables rule above), so there's nothing
+      # to gain from ever preferring it here.
+      #
+      # A single connection per hostname is enough for all three of these
+      # specifically -- each one's actual blob/layer download stays on the
+      # same hostname it started on (confirmed by tracing the redirect for
+      # each), resolving to one small, stable address, not a CDN edge with
+      # a large rotating pool. That property is *why* these three were
+      # chosen (mirror.gcr.io over docker.io for the same reason): a
+      # registry whose blob storage redirects to shared CDN infrastructure
+      # (Docker Hub's docker.io, or AWS ECR Public's CloudFront-fronted
+      # blobs) can hand podman's own later pull a different address than
+      # whichever one this resolved, silently dropped by the rule below --
+      # confirmed in practice, not theoretical.
+      for reg_host in ghcr.io pkg-containers.githubusercontent.com mirror.gcr.io; do
         reg_ip="$(${pkgs.curl}/bin/curl -4 -s --max-time 5 -o /dev/null -w '%{remote_ip}' "https://$reg_host/" 2>/dev/null)"
         [ -n "$reg_ip" ] || continue
         ${pkgs.iptables}/bin/iptables -C sandbox-fw-egress -p tcp -d "$reg_ip" --dport 443 -j ACCEPT 2>/dev/null \
