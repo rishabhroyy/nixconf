@@ -53,6 +53,22 @@ let
         ( exec 9>&- 2>/dev/null; ${pkgs.coreutils}/bin/timeout 30 ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" down -v --rmi all >/dev/null 2>&1 ) || true
         ${pkgs.util-linux}/bin/umount "$HOME_DIR" 2>/dev/null || ${pkgs.util-linux}/bin/umount -l "$HOME_DIR" || true
       fi
+      # A pull that never resulted in a real container (a network hang) is
+      # invisible to `down` above: compose only knows to reach things it's
+      # tracking, and that was never one. Left alone it survives
+      # indefinitely -- observed more than once. svc-sandbox never runs
+      # anything of its own choosing, only what this stack starts, so
+      # anything still running for it other than its own baseline lingering
+      # session (needed for rootless networking, see users.users above) is
+      # safe to kill regardless of what specifically got stuck -- no need
+      # to know or name what the stack itself actually runs.
+      ${pkgs.procps}/bin/pgrep -u svc-sandbox 2>/dev/null | while read -r leftover_pid; do
+        leftover_comm="$(${pkgs.procps}/bin/ps -o comm= -p "$leftover_pid" 2>/dev/null)"
+        case "$leftover_comm" in
+          systemd|dbus-broker-launch|dbus-broker|'(sd-pam)') continue ;;
+        esac
+        kill "$leftover_pid" 2>/dev/null || true
+      done || true
       ${pkgs.coreutils}/bin/install -d -m 0700 -o svc-sandbox -g users "$HOME_DIR"
     }
   '';
@@ -158,8 +174,8 @@ in
           # here (a bad fetch, a bad manual edit) would otherwise abort the
           # *entire* firewall reload partway through, not just skip this
           # entry. Skipping it is also the safe direction: the only effect
-          # of dropping one entry is that gluetun's tunnel to that address
-          # would fail to connect, never a wider allowance.
+          # of dropping one entry is that the stack fails to connect to
+          # that one address, never a wider allowance.
           if ! printf '%s' "$addr" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
             echo "sandbox egress allowlist: skipping invalid entry: $addr" >&2
             continue
