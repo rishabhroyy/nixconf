@@ -99,22 +99,100 @@ in
     linger = true;
   };
 
-  # sops-nix fails activation on a missing key, so all five must exist --
+  # sops-nix fails activation on a missing key, so all six must exist --
   # use an empty placeholder for any you aren't using yet.
-  #   _blob       compose file for the stack. Its first-listed service is
-  #               brought up alone and waited on before anything else --
-  #               order in the file is what matters, not any given name.
-  #   _app_src    app source mounted into one of the containers
-  #   _check      post-start check script; anything but a clean exit
-  #               (including a timeout) tears the whole stack back down
-  #   _on_ready   HTTP call to make once the check passes (JSON, see
-  #               run_http_hook above)
-  #   _on_down    HTTP call to make when tearing down
+  #   _blob              compose file for the stack. Its first-listed service
+  #                      is brought up alone and waited on before anything
+  #                      else -- order in the file is what matters, not any
+  #                      given name.
+  #   _app_src           app source mounted into one of the containers
+  #   _check             post-start check script; anything but a clean exit
+  #                      (including a timeout) tears the whole stack back down
+  #   _on_ready          HTTP call to make once the check passes (JSON, see
+  #                      run_http_hook above)
+  #   _on_down           HTTP call to make when tearing down
+  #   _egress_allowlist  one IP per line -- see the OUTPUT rule below
   sops.secrets.sandbox_stack_blob = {};
   sops.secrets.sandbox_stack_app_src = {};
   sops.secrets.sandbox_stack_check = {};
   sops.secrets.sandbox_stack_on_ready = {};
   sops.secrets.sandbox_stack_on_down = {};
+  sops.secrets.sandbox_stack_egress_allowlist = {};
+
+  # Host-level backstop, independent of anything the stack's own containers
+  # do to themselves: no matter what runs inside that netns or what its own
+  # internal rules say, the *host* only ever lets svc-sandbox's traffic reach
+  # a fixed, small set of addresses on one UDP port -- everything else from
+  # that uid is dropped before it ever leaves this machine. Matched by uid
+  # (owner module), not by interface or container, so it holds even if
+  # something inside the stack is misconfigured, compromised, or just wrong.
+  # A dedicated chain (flushed and rebuilt every activation, same pattern
+  # nixos-fw itself uses for its own chains just above) keeps this rule from
+  # duplicating across every rebuild/firewall restart instead of appending
+  # forever.
+  networking.firewall.extraCommands = ''
+    sandbox_uid=$(id -u svc-sandbox 2>/dev/null) || sandbox_uid=""
+    if [ -n "$sandbox_uid" ]; then
+      # Built fully under a staging name before OUTPUT ever references it --
+      # a flush-then-rebuild of the *live* chain would leave a real window
+      # (however brief) where OUTPUT has no restriction on this uid at all,
+      # falling through to its own default ACCEPT for however long the
+      # rebuild takes. Building off to the side first and only then cutting
+      # over removes that window rather than just shrinking it.
+      iptables -F sandbox-fw-egress-staging 2>/dev/null || true
+      iptables -X sandbox-fw-egress-staging 2>/dev/null || true
+      iptables -N sandbox-fw-egress-staging
+      # Reply traffic for a connection accepted elsewhere (the docker0
+      # app-port INPUT rule above, for hokago's own calls into this stack)
+      # is still a locally-generated packet from this uid on OUTPUT -- without
+      # this, replies on that already-accepted connection would hit the same
+      # default DROP as everything else below. Only ESTABLISHED,RELATED,
+      # never NEW -- a brand new outbound attempt still has to clear the
+      # destination allowlist below regardless of what this uid has open.
+      iptables -A sandbox-fw-egress-staging -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      if [ -s "${config.sops.secrets.sandbox_stack_egress_allowlist.path}" ]; then
+        while IFS= read -r addr; do
+          [ -n "$addr" ] || continue
+          # This whole script runs under `set -e` (it's sourced into
+          # firewall-start, which is itself `bash -e`) -- one malformed line
+          # here (a bad fetch, a bad manual edit) would otherwise abort the
+          # *entire* firewall reload partway through, not just skip this
+          # entry. Skipping it is also the safe direction: the only effect
+          # of dropping one entry is that gluetun's tunnel to that address
+          # would fail to connect, never a wider allowance.
+          if ! printf '%s' "$addr" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+            echo "sandbox egress allowlist: skipping invalid entry: $addr" >&2
+            continue
+          fi
+          iptables -A sandbox-fw-egress-staging -p udp -d "$addr" --dport 51820 -j ACCEPT
+        done < "${config.sops.secrets.sandbox_stack_egress_allowlist.path}"
+      fi
+      iptables -A sandbox-fw-egress-staging -j DROP
+
+      # Cutover: insert the new (fully-populated, exhaustive -- every packet
+      # gets a final ACCEPT/DROP from it) jump ahead of the old one before
+      # removing the old one. Both briefly exist together, but the new rule
+      # is checked first and never falls through to the old one, so there is
+      # no packet, at any point, evaluated against neither.
+      iptables -I OUTPUT -m owner --uid-owner "$sandbox_uid" -j sandbox-fw-egress-staging
+      iptables -D OUTPUT -m owner --uid-owner "$sandbox_uid" -j sandbox-fw-egress 2>/dev/null || true
+
+      # Old chain is now unreferenced -- safe to remove. Renaming the
+      # staging chain into the stable name (rather than leaving it as
+      # "-staging") keeps the name sandbox-up's own check looks for, and
+      # rename preserves the chain's existing kernel reference, so the jump
+      # OUTPUT already has into it stays valid across the rename.
+      iptables -F sandbox-fw-egress 2>/dev/null || true
+      iptables -X sandbox-fw-egress 2>/dev/null || true
+      iptables -E sandbox-fw-egress-staging sandbox-fw-egress
+
+      # No allowlist entries exist for IPv6 (the stack disables it
+      # internally) -- close that path at the host too instead of leaving it
+      # merely unused.
+      ip6tables -D OUTPUT -m owner --uid-owner "$sandbox_uid" -j DROP 2>/dev/null || true
+      ip6tables -A OUTPUT -m owner --uid-owner "$sandbox_uid" -j DROP
+    fi
+  '';
 
   environment.systemPackages = with pkgs; [
     podman-compose
@@ -131,6 +209,15 @@ in
 
       exec 9>"$LOCK"
       ${pkgs.util-linux}/bin/flock -n 9 || { echo "sandbox-up: already running" >&2; exit 1; }
+
+      # Fail closed before anything starts: the host egress backstop
+      # (networking.firewall.extraCommands, above) is a second, independent
+      # layer this whole design depends on, not an optional extra. If a
+      # rebuild hasn't reloaded the firewall yet, or the rule was dropped
+      # some other way, that's exactly the situation the stack must never
+      # run under -- nothing else here checks for it once containers exist.
+      ${pkgs.iptables}/bin/iptables -L OUTPUT -n 2>/dev/null | ${pkgs.gnugrep}/bin/grep -q "sandbox-fw-egress" \
+        || { echo "sandbox-up: host egress backstop chain missing -- refusing to start (nixos-rebuild switch first?)" >&2; exit 1; }
 
       teardown() {
         echo "sandbox-up: did not complete -- removing the stack" >&2
@@ -168,6 +255,58 @@ in
       p() { ( exec 9>&- 2>/dev/null; ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman}/bin/podman "$@" ); }
       pc() { ( exec 9>&- 2>/dev/null; ${pkgs.util-linux}/bin/runuser -u svc-sandbox -- ${pkgs.podman-compose}/bin/podman-compose -f "$HOME_DIR/pod.yaml" "$@" ); }
 
+      # The images below get pulled fresh by svc-sandbox's own podman on
+      # every single run -- the compose stack's storage root is the same
+      # tmpfs mounted above, wiped on every teardown by design, so nothing
+      # ever survives between sessions to reuse. That pull is a real host-
+      # level HTTPS connection from svc-sandbox, subject to the same egress
+      # backstop as everything else on that uid -- without an exception,
+      # the very next command would fail every single time.
+      #
+      # Scoped to exactly what's needed (443 only, only these registries'
+      # currently-resolved IPs), added here rather than as a toggle around
+      # just the pull: a temporary widen-then-retighten was considered and
+      # rejected on purpose -- a failed retighten step would leave the
+      # sandbox open far wider than this bounded, standing exception ever
+      # is. Resolved here (not in the boot-time firewall rule) because DNS
+      # may not be up yet that early in boot; this runs on-demand, well
+      # after. Not removed on teardown -- reset (below) and refreshed to
+      # current IPs on every sandbox-up instead, so a stale entry (a cloud
+      # IP long since reassigned to someone else) can never outlive one run.
+      #
+      # Reset just this subset first -- safe unconditionally, since removing
+      # an allow rule can only ever narrow what's already default-denied,
+      # never open anything, and this fully completes before the pull that
+      # actually needs these entries even starts.
+      while IFS= read -r rule; do
+        [ -n "$rule" ] || continue
+        ${pkgs.iptables}/bin/iptables -D sandbox-fw-egress $rule
+      done < <(${pkgs.iptables}/bin/iptables -S sandbox-fw-egress 2>/dev/null | ${pkgs.gnugrep}/bin/grep -- '--dport 443' | ${pkgs.gnused}/bin/sed 's/^-A sandbox-fw-egress //')
+
+      # A plain DNS lookup here would trust whatever the resolver hands
+      # back with no way to verify it -- a spoofed/poisoned answer gets
+      # permanently allowlisted the same as a real one. Actually completing
+      # a TLS handshake and checking the cert validates for this exact
+      # hostname closes that: a spoofed IP fails certificate validation and
+      # curl reports nothing, so nothing gets added for it.
+      #
+      # -4 is load-bearing, not a style choice: most of these hostnames
+      # publish AAAA records, this host has real working IPv6, and curl's
+      # default happy-eyeballs behavior does pick the v6 address in
+      # practice (confirmed directly against registry-1.docker.io). `iptables`
+      # (as opposed to `ip6tables`) rejects a v6 address outright, and under
+      # this script's `set -e` that would abort and tear down the whole
+      # stack -- not a rare edge case, the reproducible common case on this
+      # host. IPv6 is unconditionally blocked for this uid anyway (see the
+      # ip6tables rule above), so there's nothing to gain from ever
+      # preferring it here.
+      for reg_host in ghcr.io pkg-containers.githubusercontent.com registry-1.docker.io auth.docker.io production.cloudflare.docker.com; do
+        reg_ip="$(${pkgs.curl}/bin/curl -4 -s --max-time 5 -o /dev/null -w '%{remote_ip}' "https://$reg_host/" 2>/dev/null)"
+        [ -n "$reg_ip" ] || continue
+        ${pkgs.iptables}/bin/iptables -C sandbox-fw-egress -p tcp -d "$reg_ip" --dport 443 -j ACCEPT 2>/dev/null \
+          || ${pkgs.iptables}/bin/iptables -I sandbox-fw-egress 1 -p tcp -d "$reg_ip" --dport 443 -j ACCEPT
+      done
+
       # The compose file's first-listed service, whatever it's named --
       # brought up alone and waited on before anything else, rather than
       # trusting compose's own depends_on/condition to enforce that.
@@ -193,14 +332,24 @@ in
       # under everything attached to it.
       pc up -d --no-recreate
 
+      # check.sh itself runs directly on the host as svc-sandbox below (not
+      # inside any podman netns), so its own top-level network calls are
+      # subject to the same host egress backstop everything else on that
+      # uid is -- a bare curl there would just be dropped. Fetched here, as
+      # root, unrestricted, once, rather than carving a hole in that rule
+      # for an unrelated diagnostic lookup.
+      HOST_IP="$(${pkgs.curl}/bin/curl -s --max-time 5 https://api.ipify.org)"
+      [ -n "$HOST_IP" ] || { echo "sandbox-up: could not read the host's own public IP" >&2; teardown; }
+      HOST_GEO="$(${pkgs.curl}/bin/curl -s --max-time 5 "http://ip-api.com/json/$HOST_IP" 2>/dev/null)"
+
       # Post-start check, bounded so a hang in here can't hang this script
       # forever. It execs into every other container the stack defines, so
       # a service that never actually started (bad command, crash loop,
       # missing image) fails there with a clear error -- no separate
       # "is everything running" pass needed first.
-      POD_DIR="$HOME_DIR" PODMAN="${pkgs.podman}/bin/podman" \
+      POD_DIR="$HOME_DIR" PODMAN="${pkgs.podman}/bin/podman" HOST_IP="$HOST_IP" HOST_GEO="$HOST_GEO" \
         ${pkgs.coreutils}/bin/timeout 180 \
-        ${pkgs.util-linux}/bin/runuser -u svc-sandbox --whitelist-environment=POD_DIR,PODMAN \
+        ${pkgs.util-linux}/bin/runuser -u svc-sandbox --whitelist-environment=POD_DIR,PODMAN,HOST_IP,HOST_GEO \
         -- ${pkgs.bash}/bin/bash "$HOME_DIR/check.sh"
 
       trap - ERR INT TERM
