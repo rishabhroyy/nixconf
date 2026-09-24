@@ -12,7 +12,6 @@ in
     ./samba-ntfs.nix
     ./vfio.nix
     ./sandbox-podman.nix
-    ./altserver-dns.nix
   ];
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
