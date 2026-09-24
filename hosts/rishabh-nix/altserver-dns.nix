@@ -62,9 +62,16 @@ in
         exit 0
       fi
 
-      newline="srv-host=AltServer._altserver._tcp.${zone},win11.${zone},$port,0,0"
-      if [ "$(cat ${srvStateFile} 2>/dev/null)" != "$newline" ]; then
-        echo "$newline" > ${srvStateFile}
+      # Compared against what dnsmasq is actually serving right now, not
+      # against our own state file -- the file being correct doesn't mean
+      # a running dnsmasq has ever loaded it (e.g. it started before this
+      # file existed, or someone restarted it out of band). Self-heals
+      # instead of drifting silently.
+      livePort=$(${pkgs.dnsutils}/bin/dig @127.0.0.1 -p 53 \
+        AltServer._altserver._tcp.${zone} SRV +short | ${pkgs.gawk}/bin/awk '{print $3}')
+
+      if [ "$livePort" != "$port" ]; then
+        echo "srv-host=AltServer._altserver._tcp.${zone},win11.${zone},$port,0,0" > ${srvStateFile}
         # dnsmasq's SIGHUP reload only re-reads /etc/hosts, DHCP leases and
         # resolv.conf -- srv-host from a conf-file include needs a real
         # restart to actually take effect.
