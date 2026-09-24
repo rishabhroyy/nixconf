@@ -1,11 +1,15 @@
 { config, lib, pkgs, ... }:
 
-# Unicast DNS-SD ("wide-area Bonjour", RFC 6763) responder so AltStore on
-# the phone can find AltServer (Windows VM) over Tailscale -- plain mDNS
-# is multicast-only and Tailscale never carries it between nodes. Answers
+# Unicast DNS-SD (RFC 6763) responder so the patched AltStore build can
+# find AltServer (Windows VM) over Tailscale -- plain mDNS is
+# multicast-only and Tailscale never carries it between nodes. Answers
 # static PTR/TXT/A records for _altserver._tcp under a made-up zone, plus
 # a live-tracked SRV record; Tailscale's split-DNS sends the phone's
 # queries for that zone to this box instead of the public internet.
+# AltStore's own Bonjour browse is patched to explicitly request this
+# zone (see ~/Downloads/AltStore-patched), so unlike the original
+# attempt, no reverse-PTR/automatic-browsing-domain trickery is needed --
+# the app just asks for "altserver.internal." directly.
 #
 # AltServer binds a random ephemeral port every launch (confirmed: 61502
 # one run, 50161 the next -- no documented flag/config to pin it), so the
@@ -20,29 +24,15 @@ in
 {
   sops.secrets.altserver_tailnet_name = {};
   sops.secrets.altserver_server_id = {};
-  # The reverse-DNS zone for the phone's own Tailscale IP, already reversed
-  # -- e.g. IP 100.84.228.55 -> "55.228.84.100.in-addr.arpa". AltStore
-  # browses Bonjour with an empty domain, which relies on the OS's
-  # automatic-browsing-domain lookup (RFC 6763 SS11): it queries
-  # lb._dns-sd._udp.<this zone> to ask "what wide-area domain should I
-  # browse?" -- without this record, the forward zone below is correct but
-  # never gets queried at all. Assumes the iOS Tailscale interface presents
-  # a /32 (point-to-point) netmask, so the full 4-octet reverse zone is
-  # used; if this doesn't work, the fallback is trying the /24-truncated
-  # form instead (drop the last octet, e.g. "228.84.100.in-addr.arpa").
-  sops.secrets.altserver_phone_reverse_zone = {};
 
-  # cname/txt-record/reverse-PTR reference secrets, so they can't be baked
-  # into dnsmasq's normal (world-readable, nix-store) settings file --
-  # rendered instead into a root-only file at activation time and pulled
-  # in via dnsmasq's own conf-file include.
+  # cname/txt-record reference secrets, so they can't be baked into
+  # dnsmasq's normal (world-readable, nix-store) settings file -- rendered
+  # instead into a root-only file at activation time and pulled in via
+  # dnsmasq's own conf-file include.
   sops.templates."altserver-dns.conf" = {
     content = ''
       cname=win11.${zone},rishabh-pc.${config.sops.placeholder.altserver_tailnet_name}
       txt-record=AltServer._altserver._tcp.${zone},serverID=${config.sops.placeholder.altserver_server_id}
-      ptr-record=b._dns-sd._udp.${config.sops.placeholder.altserver_phone_reverse_zone},${zone}
-      ptr-record=db._dns-sd._udp.${config.sops.placeholder.altserver_phone_reverse_zone},${zone}
-      ptr-record=lb._dns-sd._udp.${config.sops.placeholder.altserver_phone_reverse_zone},${zone}
     '';
     restartUnits = [ "dnsmasq.service" ];
   };
