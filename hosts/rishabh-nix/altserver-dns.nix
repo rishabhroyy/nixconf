@@ -53,7 +53,7 @@ in
     requires = [ "avahi-daemon.service" ];
     serviceConfig.Type = "oneshot";
     script = ''
-      port=$(${pkgs.avahi}/bin/avahi-browse -k -r -t -p _altserver._tcp 2>/dev/null \
+      port=$(${pkgs.avahi}/bin/avahi-browse -r -t -p _altserver._tcp 2>/dev/null \
         | ${pkgs.gawk}/bin/awk -F';' '$1=="="{print $9; exit}')
 
       # AltServer not currently announcing (off, or between launches) --
