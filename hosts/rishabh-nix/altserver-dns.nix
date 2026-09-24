@@ -65,7 +65,10 @@ in
       newline="srv-host=AltServer._altserver._tcp.${zone},win11.${zone},$port,0,0"
       if [ "$(cat ${srvStateFile} 2>/dev/null)" != "$newline" ]; then
         echo "$newline" > ${srvStateFile}
-        ${pkgs.systemd}/bin/systemctl reload-or-restart dnsmasq.service
+        # dnsmasq's SIGHUP reload only re-reads /etc/hosts, DHCP leases and
+        # resolv.conf -- srv-host from a conf-file include needs a real
+        # restart to actually take effect.
+        ${pkgs.systemd}/bin/systemctl restart dnsmasq.service
       fi
     '';
   };
