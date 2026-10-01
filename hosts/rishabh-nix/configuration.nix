@@ -86,9 +86,23 @@ in
   networking.interfaces.enp41s0.wakeOnLan.enable = true;
 
   # Tailscale
+  #
+  # This host specifically (not the sidecar containers, which still share
+  # tailscale_auth_key below) uses its own non-ephemeral key, so its node
+  # identity/IP stays stable. That matters here because the
+  # altserver-dns.nix split-DNS setup has to point Tailscale's admin
+  # console at this host's IP directly -- that field only accepts a raw
+  # IP, not a MagicDNS hostname, so unlike every other service here (all
+  # reached by hostname, immune to IP churn) this one spot actually
+  # breaks if the node re-registers under a new IP. An ephemeral key
+  # would risk exactly that if the host ever stayed offline long enough
+  # for Tailscale to reap it. Also run "Disable key expiry" for this
+  # device in the admin console after it first authenticates -- that
+  # removes the separate ~180-day node-key rotation too, independent of
+  # whatever expiry the key itself was generated with.
   services.tailscale = {
     enable = true;
-    authKeyFile = config.sops.secrets.tailscale_auth_key.path;
+    authKeyFile = config.sops.secrets.tailscale_auth_key_persistent.path;
     useRoutingFeatures = "server";
     extraUpFlags = [
       "--advertise-exit-node"
@@ -135,6 +149,7 @@ in
   sops.secrets.motherboard_uuid = {};
   sops.secrets.motherboard_serial = {};
   sops.secrets.tailscale_auth_key = {};
+  sops.secrets.tailscale_auth_key_persistent = {};
   sops.secrets.immich_db_password = {};
   sops.secrets.hokago_db_password = {};
   sops.secrets.hokago_acquire_key = {};
