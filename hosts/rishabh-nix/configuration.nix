@@ -428,6 +428,10 @@ in
       set -euo pipefail
       ${pkgs.coreutils}/bin/df -h /
       ${pkgs.systemd}/bin/systemctl start nix-gc.service docker-prune.service
+      # Drop boot entries for generations GC just deleted. Uses the default
+      # profile, not /run/current-system, so a `nixos-rebuild test` build
+      # never becomes the boot default.
+      /nix/var/nix/profiles/system/bin/switch-to-configuration boot
       ${pkgs.coreutils}/bin/df -h /
     '')
     (pkgs.writeShellScriptBin "update-containers" ''
