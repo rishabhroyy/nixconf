@@ -3,6 +3,14 @@
 {
   # Enable Docker
   virtualisation.docker.enable = true;
+  # Weekly `docker system prune`: stopped containers, dangling images (old
+  # tags left behind by update-containers), unused networks, build cache.
+  # No --all (would delete images of stacks that are merely stopped, which
+  # then re-pull a possibly newer :release on start) and no --volumes.
+  virtualisation.docker.autoPrune = {
+    enable = true;
+    dates = "weekly";
+  };
   virtualisation.oci-containers.backend = "docker";
 
   # Tailscale Sidecars and Services
@@ -68,6 +76,9 @@
         "--device=nvidia.com/gpu=all"
       ];
       environmentFiles = [ config.sops.templates."immich.env".path ];
+      # v3.3.0+: re-exported (numerically identical) models in an optimized
+      # format -- faster, less VRAM, no re-run of jobs needed.
+      environment.MACHINE_LEARNING_MODEL_REVISION = "v2";
       volumes = [
         "/var/lib/immich/model-cache:/cache"
       ];
