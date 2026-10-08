@@ -422,6 +422,14 @@ in
         echo "Warning: the power-sync monitor is not active, so verify the host powers off before the next startup." >&2
       fi
     '')
+    # Runs the same units the weekly timers do (nix.gc + docker autoPrune),
+    # so flags/retention stay defined in one place.
+    (pkgs.writeShellScriptBin "gc-all" ''
+      set -euo pipefail
+      ${pkgs.coreutils}/bin/df -h /
+      ${pkgs.systemd}/bin/systemctl start nix-gc.service docker-prune.service
+      ${pkgs.coreutils}/bin/df -h /
+    '')
     (pkgs.writeShellScriptBin "update-containers" ''
       set -euo pipefail
 
@@ -513,6 +521,7 @@ in
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
+    gc-all = "sudo /run/current-system/sw/bin/gc-all";
     disable-power-sync = "sudo /run/current-system/sw/bin/disable-power-sync";
     enable-power-sync = "sudo /run/current-system/sw/bin/enable-power-sync";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
