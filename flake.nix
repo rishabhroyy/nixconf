@@ -5,13 +5,9 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     sops-nix.url = "github:Mic92/sops-nix";
     sops-nix.inputs.nixpkgs.follows = "nixpkgs";
-    microvm.url = "github:microvm-nix/microvm.nix";
-    microvm.inputs.nixpkgs.follows = "nixpkgs";
-    hermes-agent.url = "github:NousResearch/hermes-agent";
-    hermes-agent.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { nixpkgs, sops-nix, microvm, hermes-agent, ... }:
+  outputs = { nixpkgs, sops-nix, ... }:
   let
     # Overlay to patch QEMU with the vmcall/hypercall quirk fix and the
     # low-risk Windows VFIO identity tweaks used by the win11 domain.
@@ -137,23 +133,6 @@ EOF
         modules = [
           { nixpkgs.overlays = [ qemuPatchedOverlay ]; }
           sops-nix.nixosModules.sops
-          microvm.nixosModules.host
-          {
-            microvm.autostart = [ "hermes" ];
-            microvm.vms.hermes.config = {
-              imports = [
-                # Package only -- deliberately NOT importing
-                # hermes-agent.nixosModules.default's services.hermes-agent.
-                # That module writes a `.managed` marker into HERMES_HOME on
-                # every activation regardless of what's configured, which
-                # makes the CLI (`hermes setup`, `hermes config edit`, ...)
-                # refuse to run. Config is manual/unmanaged on purpose --
-                # see hermes.nix.
-                { environment.systemPackages = [ hermes-agent.packages.x86_64-linux.default ]; }
-                ./hosts/rishabh-nix/microvms/hermes.nix
-              ];
-            };
-          }
           ./hosts/rishabh-nix/configuration.nix
         ];
       };

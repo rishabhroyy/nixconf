@@ -54,7 +54,7 @@ in
     "kvm.halt_poll_ns=500000"
     "default_hugepagesz=1G"
     "hugepagesz=1G"
-    "hugepages=12"
+    "hugepages=16"
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 

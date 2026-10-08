@@ -148,45 +148,6 @@ in
   sops.secrets.hokago_db_password = {};
   sops.secrets.hokago_acquire_key = {};
   sops.secrets.copyparty_password = {};
-  sops.secrets.signal_phone_number = {};
-
-  # Hermes's 4 vCPUs are unpinned QEMU threads on the same 8-thread shared
-  # pool (cores 0-3/8-11) as every container and the host itself -- Windows
-  # is safe (isolcpus + systemd.cpu_affinity keep it off cores 4-7/12-15
-  # entirely), but nothing stops Hermes from crowding out Immich/Hokago/etc
-  # under load. Lower cgroup weight (default is 100) lets it still burst to
-  # all 4 vCPUs when the pool is idle, but yields under contention instead
-  # of starving containers.
-  systemd.services."microvm@hermes".serviceConfig.CPUWeight = 50;
-
-  # Copy secrets (decrypted above, host-side, from the same secrets.yaml as
-  # everything else) into the directory shared with the hermes microvm. The
-  # guest never gets a decryption key of its own, so a compromised agent
-  # there can only read these plaintext values, not the rest of this file.
-  # tailscale_auth_key is the same reusable key the host itself uses.
-  # signal_phone_number backs the signal-cli-daemon service in hermes.nix --
-  # kept out of the tracked hermes.nix file after it got committed there and
-  # pushed to a public repo.
-  #
-  # Deliberately not syncing a hermes_env/API-key secret here -- Hermes
-  # agent config is unmanaged (see hosts/rishabh-nix/microvms/hermes.nix),
-  # configured by hand via `hermes setup` inside the guest, so there's
-  # nothing declarative to feed it.
-  systemd.services.hermes-secrets-sync = {
-    description = "Copy secrets into the shared microvm directory";
-    before = [ "microvm@hermes.service" ];
-    requiredBy = [ "microvm@hermes.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      UMask = "0077";
-    };
-    script = ''
-      install -d -m 0711 /var/lib/microvms/hermes/secrets
-      install -m 0400 ${config.sops.secrets.tailscale_auth_key.path} /var/lib/microvms/hermes/secrets/tailscale_auth_key
-      install -m 0444 ${config.sops.secrets.signal_phone_number.path} /var/lib/microvms/hermes/secrets/signal_phone_number
-    '';
-  };
 
   # Dynamically generate the Immich stack.env file natively from the Nix configuration
   sops.templates."immich.env".content = ''
@@ -505,14 +466,6 @@ in
       
       echo "All containers updated and restarted!"
     '')
-    (pkgs.writeShellScriptBin "stop-hermes" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl stop microvm@hermes.service
-    '')
-    (pkgs.writeShellScriptBin "start-hermes" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl start microvm@hermes.service
-    '')
     (pkgs.writeShellScriptBin "stop-hokago" ''
       set -euo pipefail
       ${pkgs.systemd}/bin/systemctl stop docker-hokago-proxy.service \
@@ -565,8 +518,6 @@ in
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
     reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull --ff-only && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
-    stop-hermes = "sudo /run/current-system/sw/bin/stop-hermes";
-    start-hermes = "sudo /run/current-system/sw/bin/start-hermes";
     stop-hokago = "sudo /run/current-system/sw/bin/stop-hokago";
     start-hokago = "sudo /run/current-system/sw/bin/start-hokago";
     stop-immich = "sudo /run/current-system/sw/bin/stop-immich";
