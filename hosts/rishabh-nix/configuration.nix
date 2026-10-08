@@ -426,6 +426,9 @@ in
     # so flags/retention stay defined in one place.
     (pkgs.writeShellScriptBin "gc-all" ''
       set -euo pipefail
+      # Self-elevate so it works without the alias (e.g. shells opened
+      # before the alias existed).
+      [ "$(${pkgs.coreutils}/bin/id -u)" = 0 ] || exec /run/wrappers/bin/sudo "$0" "$@"
       ${pkgs.coreutils}/bin/df -h /
       ${pkgs.systemd}/bin/systemctl start nix-gc.service docker-prune.service
       # Drop boot entries for generations GC just deleted. Uses the default
@@ -525,7 +528,6 @@ in
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
-    gc-all = "sudo /run/current-system/sw/bin/gc-all";
     disable-power-sync = "sudo /run/current-system/sw/bin/disable-power-sync";
     enable-power-sync = "sudo /run/current-system/sw/bin/enable-power-sync";
     free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
