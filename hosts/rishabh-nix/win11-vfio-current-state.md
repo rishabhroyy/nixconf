@@ -12,14 +12,12 @@ Current stable profile for the `win11` libvirt domain.
 - Host DMI and encrypted secrets used for SMBIOS fields.
 - One small synthetic ACPI thermal SSDT.
 - 16 GiB RAM backed by 1 GiB hugepages.
-- 16 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
-  and an 8-core / 16-thread topology.
+- 8 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
+  and a 4-core / 8-thread topology, pinned to isolated host CPUs 4-7/12-15
+  (SMT pairs kept together).
 - Physical cores 4-7 isolated for the VM; physical cores 0-3 shared with NixOS.
-- Windows guest cores 0-3 map to isolated physical cores 4-7 so foreground
-  work, interrupts, and DPCs preferentially land away from host activity.
-- The eight vCPU threads on those isolated cores use low-priority real-time
-  round-robin scheduling; guest cores 4-7 and host work retain normal
-  scheduling.
+- All eight vCPU threads use low-priority real-time round-robin scheduling;
+  host work retains normal scheduling.
 - KVM poll-control reduces scheduler round trips for short guest wakeups.
 - `kvm.halt_poll_ns=500000` and the C2 idle state disabled on cores 4-7/12-15
   (`disable-win11-core-cstates.service`) to keep guest wakeups cheap.
@@ -42,8 +40,13 @@ Current stable profile for the `win11` libvirt domain.
   guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
   containers prefer the housekeeping CPUs on physical cores 0-3.
-- Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
-- KVM IOAPIC, nested virtualization, and AVIC.
+- Hyper-V enlightenments (incl. `avic`, so SynIC doesn't inhibit AVIC) with
+  the hypervisor CPUID bit visible -- hiding it made Windows ignore all of
+  them.
+- SVM hidden from the guest and `kvm_amd nested=0`: VBS/HVCI, WSL2, and
+  Hyper-V can't run inside the VM (they'd run nested on KVM, a major lag
+  source). Bare-metal Windows is unaffected and keeps VBS.
+- KVM IOAPIC and AVIC.
 - VFIO passthrough for the configured GPU, storage, and USB controllers.
 - The 2.5GbE NIC is host-owned (bridged as `br0`) instead of raw PCI
   passthrough, so NixOS (`10.0.0.3`, MAC cloned from the old 1G NIC, which is
