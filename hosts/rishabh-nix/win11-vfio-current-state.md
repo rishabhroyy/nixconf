@@ -42,8 +42,14 @@ Current stable profile for the `win11` libvirt domain.
   guest CPUs; the host NMI watchdog remains enabled.
 - Normal systemd workloads, interrupts, unbound workqueues, and managed
   containers prefer the housekeeping CPUs on physical cores 0-3.
-- Hyper-V/VBS support through libvirt's normal Hyper-V enlightenment settings.
-- KVM IOAPIC, nested virtualization, and AVIC.
+- Hyper-V enlightenments (incl. `avic`, so SynIC doesn't inhibit AVIC) with
+  the hypervisor CPUID bit visible -- hiding it made Windows ignore all of
+  them. Only works with SVM hidden (below); with SVM exposed, Windows hangs
+  at boot trying to launch Hyper-V.
+- SVM hidden from the guest, so VBS/HVCI, WSL2, and Hyper-V can't run nested
+  inside the VM. Bare-metal Windows is unaffected and keeps VBS.
+- KVM IOAPIC and AVIC. `kvm_amd nested=1` stays: `nested=0` with this config
+  is the leading suspect for earlier host hard resets.
 - VFIO passthrough for the configured GPU, storage, and USB controllers.
 - The 2.5GbE NIC is host-owned (bridged as `br0`) instead of raw PCI
   passthrough, so NixOS (`10.0.0.3`, MAC cloned from the old 1G NIC, which is

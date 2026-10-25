@@ -86,7 +86,10 @@ $HYPERV_FEATURES
     <topology sockets='1' dies='1' cores='4' threads='2'/>
     <cache mode='passthrough'/>
     <feature policy='require' name='topoext'/>
-    <feature policy='disable' name='hypervisor'/>
+    <!-- The hypervisor CPUID bit stays visible: Windows only probes the
+         Hyper-V enlightenments (PV TLB flush/IPI, stimer, TSC page) when
+         it's set. Needs SVM hidden too, or Windows hangs at boot trying to
+         launch its own Hyper-V for VBS. -->
 $SVM_FEATURE
     <feature policy='require' name='invtsc'/>
     <host-phys-bits mode='passthrough'/>
