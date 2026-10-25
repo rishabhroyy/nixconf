@@ -61,7 +61,9 @@ in
   powerManagement.cpuFreqGovernor = "performance";
 
   # AVIC as a normal KVM acceleration path. nested=1 is inert while the guest
-  # has SVM hidden (see SVM_FEATURE). No live KVM ftrace/kprobe modules are loaded.
+  # has SVM hidden (see SVM_FEATURE), but keep it: nested=0 with this VM config
+  # was the only untested difference in the builds that hard-reset the host.
+  # No live KVM ftrace/kprobe modules are loaded.
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
   # Load VFIO early so dedicated passthrough devices never bind to host drivers.
@@ -478,11 +480,15 @@ EOF
       <reenlightenment state='on'/>
       <tlbflush state='on'/>
       <ipi state='on'/>
+      <avic state='on'/>
     </hyperv>"
+      # <avic> tells Windows to skip SynIC auto-EOI, which would otherwise make
+      # KVM inhibit AVIC once the enlightenments above are active.
       # SVM is hidden (host-passthrough would pass it through) so Windows can't
       # start its own Hyper-V for VBS/HVCI and run nested on KVM. Bare-metal
-      # Windows still sees the real CPU and keeps VBS. The hypervisor CPUID
-      # bit must stay hidden: exposing it hangs Windows at boot on this setup.
+      # Windows still sees the real CPU and keeps VBS. Required with the
+      # hypervisor CPUID bit visible: with SVM exposed too, Windows hangs at
+      # boot trying to launch Hyper-V.
       export SVM_FEATURE="    <feature policy='disable' name='svm'/>"
       export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
 
@@ -770,7 +776,7 @@ EOF
       ${pkgs.coreutils}/bin/echo maximal
       ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q '<hyperv'; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|avic' || true
       ${pkgs.coreutils}/bin/printf 'hypervclock-timer='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q "timer name='hypervclock'"; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
 
