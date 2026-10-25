@@ -182,6 +182,7 @@ in
       export LC_ALL=C
       REBOOT_MARKER=/run/win11-reboot-requested
       BAREMETAL_NEXT_MARKER=/run/win11-boot-baremetal-next
+      STARTED_MARKER=/run/win11-started
 
       set_windows_bootnext() {
         BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
@@ -221,6 +222,7 @@ in
               ;;
             *"event 'lifecycle' for domain win11: Started Booted"*|*"event 'lifecycle' for domain 'win11': Started Booted"*)
               ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
+              ${pkgs.coreutils}/bin/touch "$STARTED_MARKER"
               ;;
             *"event 'lifecycle' for domain win11: Stopped Shutdown"*|*"event 'lifecycle' for domain 'win11': Stopped Shutdown"*)
               (
@@ -244,6 +246,18 @@ in
                     exit 0
                   fi
                   ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
+                fi
+
+                # A guest that stops within 2 minutes of starting wasn't shut
+                # down deliberately (failed boot, crash, update bounce). Never
+                # take the host down for that; it would look like a broken boot.
+                if [ -e "$STARTED_MARKER" ]; then
+                  NOW="$(${pkgs.coreutils}/bin/date +%s)"
+                  STARTED_TIME="$(${pkgs.coreutils}/bin/stat -c %Y "$STARTED_MARKER" 2>/dev/null || echo 0)"
+                  if [ "$((NOW - STARTED_TIME))" -lt 120 ]; then
+                    echo "Windows 11 stopped within 2 minutes of starting; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
+                    exit 0
+                  fi
                 fi
 
                 SYSTEM_STATE="$(${pkgs.systemd}/bin/systemctl is-system-running 2>/dev/null || true)"
