@@ -60,8 +60,8 @@ in
 
   powerManagement.cpuFreqGovernor = "performance";
 
-  # Enable nested virtualization for Windows VBS/Core Isolation and AVIC as a
-  # normal KVM acceleration path. No live KVM ftrace/kprobe modules are loaded.
+  # AVIC as a normal KVM acceleration path. nested=1 is inert while the guest
+  # has SVM hidden (see SVM_FEATURE). No live KVM ftrace/kprobe modules are loaded.
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
   # Load VFIO early so dedicated passthrough devices never bind to host drivers.
@@ -479,7 +479,11 @@ EOF
       <tlbflush state='on'/>
       <ipi state='on'/>
     </hyperv>"
-      export SVM_FEATURE="    <feature policy='require' name='svm'/>"
+      # SVM is hidden (host-passthrough would pass it through) so Windows can't
+      # start its own Hyper-V for VBS/HVCI and run nested on KVM. Bare-metal
+      # Windows still sees the real CPU and keeps VBS. The hypervisor CPUID
+      # bit must stay hidden: exposing it hangs Windows at boot on this setup.
+      export SVM_FEATURE="    <feature policy='disable' name='svm'/>"
       export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
 
       export QEMU_COMMANDLINE="  <qemu:commandline>
