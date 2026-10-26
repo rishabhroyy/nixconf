@@ -215,6 +215,7 @@
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
         "/mnt/data4/YouTube/Anime:/media/anime:rw"
+        "/mnt/data4/YouTube/K-Drama:/media/kdrama:ro"
       ];
     };
 
@@ -236,6 +237,7 @@
         "/mnt/data4/YouTube/Movies:/media/movies:ro"
         "/mnt/data4/YouTube/TV:/media/tv:ro"
         "/mnt/data4/YouTube/Anime:/media/anime:rw"
+        "/mnt/data4/YouTube/K-Drama:/media/kdrama:ro"
       ];
     };
 
