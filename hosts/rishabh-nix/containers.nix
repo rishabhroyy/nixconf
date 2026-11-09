@@ -1,11 +1,12 @@
 { config, pkgs, ... }:
 
 let
-  # samechan's HTTPS endpoint (https://samechan.<tailnet>.ts.net -- the iPhone app needs HTTPS).
-  # Plain http://samechan goes through samechan-proxy like the other stacks.
-  samechanServe = pkgs.writeText "samechan-serve.json" (builtins.toJSON {
+  # HTTPS for each sidecar: https://<app>.<tailnet>.ts.net -> the app's local port.
+  # `tailscale serve` is tailnet-only (public exposure would need Funnel, which is never
+  # enabled here). Plain http://<app> keeps going through each stack's Caddy proxy on :80.
+  tsServe = port: pkgs.writeText "ts-serve-${toString port}.json" (builtins.toJSON {
     TCP."443".HTTPS = true;
-    Web."\${TS_CERT_DOMAIN}:443".Handlers."/".Proxy = "http://127.0.0.1:8787";
+    Web."\${TS_CERT_DOMAIN}:443".Handlers."/".Proxy = "http://127.0.0.1:${toString port}";
   });
 in
 {
@@ -52,10 +53,12 @@ in
       environment = {
         TS_HOSTNAME = "immich";
         TS_STATE_DIR = "/var/lib/tailscale";
+        TS_SERVE_CONFIG = "/config/serve.json";
       };
       volumes = [
         "/dev/net/tun:/dev/net/tun"
         "/var/lib/tailscale-immich:/var/lib/tailscale"
+        "${tsServe 2283}:/config/serve.json:ro"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
@@ -144,10 +147,12 @@ in
       environment = {
         TS_HOSTNAME = "hokago";
         TS_STATE_DIR = "/var/lib/tailscale";
+        TS_SERVE_CONFIG = "/config/serve.json";
       };
       volumes = [
         "/dev/net/tun:/dev/net/tun"
         "/var/lib/tailscale-hokago:/var/lib/tailscale"
+        "${tsServe 3000}:/config/serve.json:ro"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
@@ -270,10 +275,12 @@ in
       environment = {
         TS_HOSTNAME = "portainer";
         TS_STATE_DIR = "/var/lib/tailscale";
+        TS_SERVE_CONFIG = "/config/serve.json";
       };
       volumes = [
         "/dev/net/tun:/dev/net/tun"
         "/var/lib/tailscale-portainer:/var/lib/tailscale"
+        "${tsServe 9000}:/config/serve.json:ro"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
@@ -311,10 +318,12 @@ in
       environment = {
         TS_HOSTNAME = "copyparty";
         TS_STATE_DIR = "/var/lib/tailscale";
+        TS_SERVE_CONFIG = "/config/serve.json";
       };
       volumes = [
         "/dev/net/tun:/dev/net/tun"
         "/var/lib/tailscale-copyparty:/var/lib/tailscale"
+        "${tsServe 3923}:/config/serve.json:ro"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
@@ -364,7 +373,7 @@ in
       volumes = [
         "/dev/net/tun:/dev/net/tun"
         "/var/lib/tailscale-samechan:/var/lib/tailscale"
-        "${samechanServe}:/config/serve.json:ro"
+        "${tsServe 8787}:/config/serve.json:ro"
       ];
       extraOptions = [
         "--cap-add=NET_ADMIN"
