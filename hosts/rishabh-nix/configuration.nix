@@ -3,6 +3,22 @@
 let
   # Flip this to true for a boring SSH/Tailscale-only rescue boot.
   recoveryMode = false;
+
+  # samechan's image on ghcr is private. Root's docker borrows rishabh's existing gh login for
+  # ghcr.io pulls -- nothing is stored. One-time: `gh auth refresh -s read:packages`.
+  ghcrHelper = pkgs.writeShellScriptBin "docker-credential-gh-rishabh" ''
+    [ "$1" = get ] || exit 0
+    cat >/dev/null
+    if [ "$(${pkgs.coreutils}/bin/id -u)" = 0 ]; then
+      token=$(${pkgs.util-linux}/bin/runuser -u rishabh -- env HOME=/home/rishabh ${pkgs.github-cli}/bin/gh auth token)
+    else
+      token=$(${pkgs.github-cli}/bin/gh auth token)
+    fi
+    printf '{"Username":"rishabhroyy","Secret":"%s"}\n' "$token"
+  '';
+  samechanDockerConfig = pkgs.writeTextDir "config.json" (builtins.toJSON {
+    credHelpers."ghcr.io" = "gh-rishabh";
+  });
 in
 {
   imports = [
@@ -319,6 +335,12 @@ in
     requires = [ "mnt-data4.mount" ];
   };
 
+  # samechan's image is private: let this unit's `docker run` pull it with the gh helper above
+  systemd.services.docker-samechan = lib.mkIf (!recoveryMode) {
+    path = [ ghcrHelper ];
+    environment.DOCKER_CONFIG = "${samechanDockerConfig}";
+  };
+
   # Valkey runs as 999:valkey. tmpfiles Z fixes perms on boot, but a
   # nixos-rebuild that only recreates the dir as root:root (fresh cache)
   # needs an immediate chown before the container starts, otherwise the
@@ -450,7 +472,11 @@ in
       ${pkgs.docker}/bin/docker pull copyparty/ac:latest
       ${pkgs.docker}/bin/docker pull caddy:alpine
       ${pkgs.docker}/bin/docker pull tailscale/tailscale:latest
-      
+      ${pkgs.docker}/bin/docker pull ollama/ollama:latest
+      # private image: pulled with rishabh's gh login (see ghcrHelper)
+      DOCKER_CONFIG=${samechanDockerConfig} PATH=${ghcrHelper}/bin:$PATH \
+        ${pkgs.docker}/bin/docker pull ghcr.io/rishabhroyy/samechan:latest
+
       echo "Restarting all container stacks to apply updates and refresh sidecars..."
       
       # Immich Stack
@@ -478,7 +504,13 @@ in
       ${pkgs.systemd}/bin/systemctl restart docker-tailscale-copyparty.service \
                                              docker-copyparty.service \
                                              docker-copyparty-proxy.service
-      
+
+      # Samechan Stack
+      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-samechan.service \
+                                             docker-samechan-ollama.service \
+                                             docker-samechan.service \
+                                             docker-samechan-proxy.service
+
       echo "All containers updated and restarted!"
     '')
     (pkgs.writeShellScriptBin "stop-hokago" ''
@@ -537,5 +569,6 @@ in
     start-hokago = "sudo /run/current-system/sw/bin/start-hokago";
     stop-immich = "sudo /run/current-system/sw/bin/stop-immich";
     start-immich = "sudo /run/current-system/sw/bin/start-immich";
+    samechan-ctl = "sudo docker exec -it samechan node src/main.ts";
   };
 }

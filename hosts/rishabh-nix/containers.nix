@@ -1,6 +1,17 @@
-{ config, ... }:
+{ config, pkgs, ... }:
 
+let
+  # samechan's HTTPS endpoint (https://samechan.<tailnet>.ts.net -- the iPhone app needs HTTPS).
+  # Plain http://samechan goes through samechan-proxy like the other stacks.
+  samechanServe = pkgs.writeText "samechan-serve.json" (builtins.toJSON {
+    TCP."443".HTTPS = true;
+    Web."\${TS_CERT_DOMAIN}:443".Handlers."/".Proxy = "http://127.0.0.1:8787";
+  });
+in
 {
+  # samechan's container runs as uid 1000 (node) and keeps all its data here
+  systemd.tmpfiles.rules = [ "d /var/lib/samechan 0700 1000 1000 -" ];
+
   # Enable Docker
   virtualisation.docker.enable = true;
   # Weekly `docker system prune`: stopped containers, dangling images (old
@@ -336,6 +347,68 @@
         "--network=container:tailscale-copyparty"
       ];
       cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:3923" ];
+    };
+
+    # ---------------------------------------------------------
+    # Samechan (private image -- pulled with rishabh's gh login, see
+    # samechanDocker in configuration.nix)
+    # ---------------------------------------------------------
+    tailscale-samechan = {
+      image = "tailscale/tailscale:latest";
+      environmentFiles = [ config.sops.templates."tailscale.env".path ];
+      environment = {
+        TS_HOSTNAME = "samechan";
+        TS_STATE_DIR = "/var/lib/tailscale";
+        TS_SERVE_CONFIG = "/config/serve.json";
+      };
+      volumes = [
+        "/dev/net/tun:/dev/net/tun"
+        "/var/lib/tailscale-samechan:/var/lib/tailscale"
+        "${samechanServe}:/config/serve.json:ro"
+      ];
+      extraOptions = [
+        "--cap-add=NET_ADMIN"
+        "--cap-add=NET_RAW"
+      ];
+    };
+
+    # Local embeddings for her memory (CPU is plenty). samechan pulls the
+    # model into it on first use.
+    samechan-ollama = {
+      image = "ollama/ollama:latest";
+      dependsOn = [ "tailscale-samechan" ];
+      extraOptions = [
+        "--network=container:tailscale-samechan"
+      ];
+      environment = {
+        OLLAMA_HOST = "127.0.0.1:11434";
+      };
+      volumes = [
+        "/var/lib/samechan-ollama:/root/.ollama"
+      ];
+    };
+
+    samechan = {
+      image = "ghcr.io/rishabhroyy/samechan:latest";
+      dependsOn = [ "tailscale-samechan" "samechan-ollama" ];
+      extraOptions = [
+        "--network=container:tailscale-samechan"
+      ];
+      environment = {
+        TZ = "America/Los_Angeles";
+      };
+      volumes = [
+        "/var/lib/samechan:/data"
+      ];
+    };
+
+    samechan-proxy = {
+      image = "caddy:alpine";
+      dependsOn = [ "tailscale-samechan" ];
+      extraOptions = [
+        "--network=container:tailscale-samechan"
+      ];
+      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:8787" ];
     };
 
   };
