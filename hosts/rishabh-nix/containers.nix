@@ -11,7 +11,10 @@ let
 in
 {
   # samechan's container runs as uid 1000 (node) and keeps all its data here
-  systemd.tmpfiles.rules = [ "d /var/lib/samechan 0700 1000 1000 -" ];
+  systemd.tmpfiles.rules = [
+    "d /var/lib/samechan 0700 1000 1000 -"
+    "d /var/lib/samechan-hindsight 0700 root root -" # her long-term memory's Postgres
+  ];
 
   # Enable Docker
   virtualisation.docker.enable = true;
@@ -395,6 +398,59 @@ in
       volumes = [
         "/var/lib/samechan-ollama:/root/.ollama"
       ];
+    };
+
+    # Hindsight's database: Postgres + pgvector. Loopback only inside the
+    # sidecar's network, so trust auth (no password to manage).
+    samechan-hindsight-db = {
+      image = "pgvector/pgvector:pg18";
+      dependsOn = [ "tailscale-samechan" ];
+      extraOptions = [
+        "--network=container:tailscale-samechan"
+      ];
+      environment = {
+        POSTGRES_USER = "hindsight";
+        POSTGRES_DB = "hindsight";
+        POSTGRES_HOST_AUTH_METHOD = "trust";
+      };
+      cmd = [ "postgres" "-c" "listen_addresses=127.0.0.1" ];
+      volumes = [
+        "/var/lib/samechan-hindsight/db:/var/lib/postgresql"
+      ];
+    };
+
+    # Hindsight: her long-term memory (API-only image, embedder/reranker baked
+    # in, runs offline). Its model calls go to samechan's bridge on 127.0.0.1:8790,
+    # which forwards them over NEAR E2EE; one path per job for cost tracking.
+    samechan-hindsight = {
+      image = "ghcr.io/vectorize-io/hindsight-api:1.2.0";
+      dependsOn = [ "tailscale-samechan" "samechan-hindsight-db" ];
+      extraOptions = [
+        "--network=container:tailscale-samechan"
+        "--stop-timeout=75"
+      ];
+      environment = let bridge = "http://127.0.0.1:8790"; in {
+        HINDSIGHT_API_HOST = "127.0.0.1"; # default 0.0.0.0 would be tailnet-exposed
+        HINDSIGHT_API_DATABASE_URL = "postgresql://hindsight@127.0.0.1:5432/hindsight";
+        HINDSIGHT_API_WORKER_ID = "samechan";
+        HINDSIGHT_API_LLM_PROVIDER = "openai";
+        HINDSIGHT_API_LLM_API_KEY = "bridge"; # not a secret: loopback-only bridge
+        HINDSIGHT_API_LLM_MODEL = "samechan"; # the bridge always uses her memory model
+        HINDSIGHT_API_LLM_BASE_URL = "${bridge}/memory/v1";
+        HINDSIGHT_API_RETAIN_LLM_BASE_URL = "${bridge}/retain/v1";
+        HINDSIGHT_API_CONSOLIDATION_LLM_BASE_URL = "${bridge}/observe/v1";
+        HINDSIGHT_API_REFLECT_LLM_BASE_URL = "${bridge}/reflect/v1";
+        HINDSIGHT_API_MENTAL_MODEL_REFRESH_LLM_BASE_URL = "${bridge}/reflect/v1";
+        HINDSIGHT_API_LLM_TIMEOUT = "300";
+        HINDSIGHT_API_SKIP_LLM_VERIFICATION = "true";
+        HINDSIGHT_API_LLM_TRACE_ENABLED = "false"; # would store prompts
+        HINDSIGHT_API_LLM_CACHE_AFFINITY = "none";
+        HINDSIGHT_API_MCP_ENABLED = "false";
+        HINDSIGHT_API_DEFAULT_TIMEZONE = "America/Los_Angeles";
+        HF_HUB_OFFLINE = "1";
+        TRANSFORMERS_OFFLINE = "1";
+        TZ = "America/Los_Angeles";
+      };
     };
 
     samechan = {

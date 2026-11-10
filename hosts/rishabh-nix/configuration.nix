@@ -473,6 +473,8 @@ in
       ${pkgs.docker}/bin/docker pull caddy:alpine
       ${pkgs.docker}/bin/docker pull tailscale/tailscale:latest
       ${pkgs.docker}/bin/docker pull ollama/ollama:latest
+      ${pkgs.docker}/bin/docker pull pgvector/pgvector:pg18
+      ${pkgs.docker}/bin/docker pull ghcr.io/vectorize-io/hindsight-api:1.2.0
       # private image: pulled with rishabh's gh login (see ghcrHelper)
       DOCKER_CONFIG=${samechanDockerConfig} PATH=${ghcrHelper}/bin:$PATH \
         ${pkgs.docker}/bin/docker pull ghcr.io/rishabhroyy/samechan:latest
@@ -508,6 +510,8 @@ in
       # Samechan Stack
       ${pkgs.systemd}/bin/systemctl restart docker-tailscale-samechan.service \
                                              docker-samechan-ollama.service \
+                                             docker-samechan-hindsight-db.service \
+                                             docker-samechan-hindsight.service \
                                              docker-samechan.service \
                                              docker-samechan-proxy.service
 
