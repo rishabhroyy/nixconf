@@ -3,7 +3,8 @@
 let
   # HTTPS for each sidecar: https://<app>.<tailnet>.ts.net -> the app's local port.
   # `tailscale serve` is tailnet-only (public exposure would need Funnel, which is never
-  # enabled here). Plain http://<app> keeps going through each stack's Caddy proxy on :80.
+  # enabled here). Plain http://<app> keeps going through each stack's Caddy proxy on :80
+  # (except samechan: HTTPS only, see below).
   tsServe = port: pkgs.writeText "ts-serve-${toString port}.json" (builtins.toJSON {
     TCP."443".HTTPS = true;
     Web."\${TS_CERT_DOMAIN}:443".Handlers."/".Proxy = "http://127.0.0.1:${toString port}";
@@ -467,14 +468,9 @@ in
       ];
     };
 
-    samechan-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-samechan" ];
-      extraOptions = [
-        "--network=container:tailscale-samechan"
-      ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:8787" ];
-    };
+    # No plain-http proxy for samechan: HTTPS via `tailscale serve` only, the one path that
+    # sets Tailscale-User-Login, which samechan's optional tailnet lock checks (an :80
+    # proxy would pass a forged header straight through).
 
   };
 }

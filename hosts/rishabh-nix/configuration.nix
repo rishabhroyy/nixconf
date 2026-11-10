@@ -512,8 +512,7 @@ in
                                              docker-samechan-ollama.service \
                                              docker-samechan-hindsight-db.service \
                                              docker-samechan-hindsight.service \
-                                             docker-samechan.service \
-                                             docker-samechan-proxy.service
+                                             docker-samechan.service
 
       echo "All containers updated and restarted!"
     '')
