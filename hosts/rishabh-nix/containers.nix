@@ -14,7 +14,7 @@ in
   # samechan's container runs as uid 1000 (node) and keeps all its data here
   systemd.tmpfiles.rules = [
     "d /var/lib/samechan 0700 1000 1000 -"
-    "d /var/lib/samechan-hindsight 0700 root root -" # her long-term memory's Postgres
+    "d /var/lib/samechan-hindsight 0700 root root -" # Hindsight's Postgres
   ];
 
   # Enable Docker
@@ -385,7 +385,7 @@ in
       ];
     };
 
-    # Local embeddings for her memory (CPU is plenty). samechan pulls the
+    # Local embeddings for samechan (CPU is plenty). samechan pulls the
     # model into it on first use.
     samechan-ollama = {
       image = "ollama/ollama:latest";
@@ -420,7 +420,7 @@ in
       ];
     };
 
-    # Hindsight: her long-term memory (API-only image, embedder/reranker baked
+    # Hindsight: samechan's long-term memory store (API-only image, embedder/reranker baked
     # in, runs offline). Its model calls go to samechan's bridge on 127.0.0.1:8790,
     # which forwards them over NEAR E2EE; one path per job for cost tracking.
     samechan-hindsight = {
@@ -436,7 +436,7 @@ in
         HINDSIGHT_API_WORKER_ID = "samechan";
         HINDSIGHT_API_LLM_PROVIDER = "openai";
         HINDSIGHT_API_LLM_API_KEY = "bridge"; # not a secret: loopback-only bridge
-        HINDSIGHT_API_LLM_MODEL = "samechan"; # the bridge always uses her memory model
+        HINDSIGHT_API_LLM_MODEL = "samechan"; # the bridge picks the actual model
         HINDSIGHT_API_LLM_BASE_URL = "${bridge}/memory/v1";
         HINDSIGHT_API_RETAIN_LLM_BASE_URL = "${bridge}/retain/v1";
         HINDSIGHT_API_CONSOLIDATION_LLM_BASE_URL = "${bridge}/observe/v1";
