@@ -447,6 +447,9 @@ in
         HINDSIGHT_API_LLM_TRACE_ENABLED = "false"; # would store prompts
         HINDSIGHT_API_LLM_CACHE_AFFINITY = "none";
         HINDSIGHT_API_MCP_ENABLED = "false";
+        # rank by fused retrieval (semantic + keyword + graph + time) instead of the bundled CPU cross-encoder,
+        # which took ~30 s per recall here (186 candidates x 3 parallel queries on the 5800X)
+        HINDSIGHT_API_RERANKER_PROVIDER = "rrf";
         HINDSIGHT_API_DEFAULT_TIMEZONE = "America/Los_Angeles";
         HF_HUB_OFFLINE = "1";
         TRANSFORMERS_OFFLINE = "1";
