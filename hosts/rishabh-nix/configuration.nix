@@ -4,6 +4,14 @@ let
   # Flip this to true for a boring SSH/Tailscale-only rescue boot.
   recoveryMode = false;
 
+  # Cap every core's idle at C1 (no deep C2 sleep). This is a stability fix:
+  # every logged Bank 5 core-watchdog machine check (bea0000001000108) hit a
+  # core that was allowed into C2. It costs roughly 10-15W at idle and does no
+  # harm to the CPU. Changing this takes a rebuild plus a reboot (it's a
+  # kernel parameter). Before turning it off, set BIOS Power Supply Idle
+  # Control to "Typical Current Idle".
+  limitCpuIdle = true;
+
   # samechan's image on ghcr is private. Root's docker borrows rishabh's existing gh login for
   # ghcr.io pulls -- nothing is stored. One-time: `gh auth refresh -s read:packages`.
   ghcrHelper = pkgs.writeShellScriptBin "docker-credential-gh-rishabh" ''
@@ -42,6 +50,7 @@ in
   boot.loader.systemd-boot.enable = true;
   boot.loader.systemd-boot.configurationLimit = 10;
   boot.loader.efi.canTouchEfiVariables = true;
+  boot.kernelParams = lib.optionals limitCpuIdle [ "processor.max_cstate=1" ];
 
   networking.hostName = "rishabh-nix";
 

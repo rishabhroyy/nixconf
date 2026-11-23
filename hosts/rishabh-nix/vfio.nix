@@ -76,19 +76,14 @@ in
   # Even with kvm.halt_poll_ns raised above, disable the C2 idle state
   # outright on the isolated cores. C2 has an 18us entry latency and a 36us
   # break-even residency here, so forcing these cores no deeper than C1
-  # (1us latency) keeps every wakeup cheap.
-  #
-  # The host cores 0-3/8-11 get the same treatment as a stability measure.
-  # Every logged core-watchdog machine check (Bank 5, bea0000001000108) hit
-  # a host core while C2 was allowed; the isolated cores, never in C2, have
-  # never faulted. Costs roughly 10-15W at idle. To test re-enabling, set BIOS
-  # Power Supply Idle Control to "Typical Current Idle" first.
+  # (1us latency) keeps every wakeup cheap. Cores 0-3/8-11 keep normal idle
+  # behavior for power savings.
   systemd.services.disable-win11-core-cstates = {
-    description = "Disable deep C-states on all cores";
+    description = "Disable deep C-states on the isolated win11 vCPU cores";
     wantedBy = [ "multi-user.target" ];
     serviceConfig.Type = "oneshot";
     script = ''
-      for CPU in $(${pkgs.coreutils}/bin/seq 0 15); do
+      for CPU in 4 5 6 7 12 13 14 15; do
         for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
           NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
           if [ "$NAME" != "POLL" ] && [ "$NAME" != "C1" ]; then
