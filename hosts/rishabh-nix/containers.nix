@@ -9,6 +9,45 @@ let
     TCP."443".HTTPS = true;
     Web."\${TS_CERT_DOMAIN}:443".Handlers."/".Proxy = "http://127.0.0.1:${toString port}";
   });
+
+  # One Tailscale sidecar per stack (`name` becomes its tailnet hostname, and
+  # `port` is what HTTPS serves). Every container of the stack joins its
+  # network namespace with --network=container:tailscale-<name>.
+  sidecar = name: port: extra: {
+    image = "tailscale/tailscale:latest";
+    environmentFiles = [ config.sops.templates."tailscale.env".path ];
+    environment = {
+      TS_HOSTNAME = name;
+      TS_STATE_DIR = "/var/lib/tailscale";
+      TS_SERVE_CONFIG = "/config/serve.json";
+    };
+    volumes = [
+      "/dev/net/tun:/dev/net/tun"
+      "/var/lib/tailscale-${name}:/var/lib/tailscale"
+      "${tsServe port}:/config/serve.json:ro"
+    ];
+    extraOptions = [
+      "--cap-add=NET_ADMIN"
+      "--cap-add=NET_RAW"
+    ];
+  } // extra;
+
+  # Plain http://<name> on :80, proxied to the app's port inside the sidecar.
+  proxy = name: port: {
+    image = "caddy:alpine";
+    dependsOn = [ "tailscale-${name}" ];
+    extraOptions = [ "--network=container:tailscale-${name}" ];
+    cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:${toString port}" ];
+  };
+
+  # hokago and hokago-worker see the same config and library.
+  hokagoVolumes = [
+    "/var/lib/hokago/config:/config"
+    "/mnt/data4/YouTube/Movies:/media/movies:ro"
+    "/mnt/data4/YouTube/TV:/media/tv:ro"
+    "/mnt/data4/YouTube/Anime:/media/anime:rw"
+    "/mnt/data4/YouTube/K-Drama:/media/kdrama:ro"
+  ];
 in
 {
   # samechan's container runs as uid 1000 (node) and keeps all its data here
@@ -51,23 +90,7 @@ in
     # ---------------------------------------------------------
     # Immich
     # ---------------------------------------------------------
-    tailscale-immich = {
-      image = "tailscale/tailscale:latest";
-      environmentFiles = [ config.sops.templates."tailscale.env".path ];
-      environment = {
-        TS_HOSTNAME = "immich";
-        TS_STATE_DIR = "/var/lib/tailscale";
-        TS_SERVE_CONFIG = "/config/serve.json";
-      };
-      volumes = [
-        "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-immich:/var/lib/tailscale"
-        "${tsServe 2283}:/config/serve.json:ro"
-      ];
-      extraOptions = [
-        "--cap-add=NET_ADMIN"
-        "--cap-add=NET_RAW"
-      ];
+    tailscale-immich = sidecar "immich" 2283 {
       ports = [ "2283:2283" ];
     };
 
@@ -131,36 +154,12 @@ in
       ];
     };
 
-    immich-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-immich" ];
-      extraOptions = [
-        "--network=container:tailscale-immich"
-      ];
-      # Elegantly proxies port 80 to 2283 so you don't have to type the port number
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:2283" ];
-    };
+    immich-proxy = proxy "immich" 2283;
 
     # ---------------------------------------------------------
     # Hokago
     # ---------------------------------------------------------
-    tailscale-hokago = {
-      image = "tailscale/tailscale:latest";
-      environmentFiles = [ config.sops.templates."tailscale.env".path ];
-      environment = {
-        TS_HOSTNAME = "hokago";
-        TS_STATE_DIR = "/var/lib/tailscale";
-        TS_SERVE_CONFIG = "/config/serve.json";
-      };
-      volumes = [
-        "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-hokago:/var/lib/tailscale"
-        "${tsServe 3000}:/config/serve.json:ro"
-      ];
-      extraOptions = [
-        "--cap-add=NET_ADMIN"
-        "--cap-add=NET_RAW"
-      ];
+    tailscale-hokago = sidecar "hokago" 3000 {
       # Loopback-only -- 127.0.0.1, never 0.0.0.0 or the LAN IP. A
       # narrower binding than routing through the Tailscale sidecar
       # below: nothing running directly on this host needs to leave the
@@ -223,13 +222,7 @@ in
         HOKAGO_TRUST_PROXY = "true";
       };
       cmd = [ "sh" "-c" ''mkdir -p /config/db-backups && f=/config/db-backups/pre-migrate-$(date +%Y%m%d-%H%M%S).sql.gz && pg_dump --no-owner "postgresql://hokago:$POSTGRES_PASSWORD@127.0.0.1:5432/hokago" | gzip > "$f"; [ "$(wc -c < "$f")" -gt 100 ] || rm -f "$f"; find /config/db-backups -name 'pre-migrate-*.sql.gz' -mtime +14 -delete; pnpm --filter @hokago/db run migrate:deploy && exec node apps/api/dist/index.js'' ];
-      volumes = [
-        "/var/lib/hokago/config:/config"
-        "/mnt/data4/YouTube/Movies:/media/movies:ro"
-        "/mnt/data4/YouTube/TV:/media/tv:ro"
-        "/mnt/data4/YouTube/Anime:/media/anime:rw"
-        "/mnt/data4/YouTube/K-Drama:/media/kdrama:ro"
-      ];
+      volumes = hokagoVolumes;
     };
 
     hokago-worker = {
@@ -245,45 +238,15 @@ in
         HOKAGO_CONFIG_DIR = "/config";
       };
       cmd = [ "sh" "-c" "exec node apps/worker/dist/index.js" ];
-      volumes = [
-        "/var/lib/hokago/config:/config"
-        "/mnt/data4/YouTube/Movies:/media/movies:ro"
-        "/mnt/data4/YouTube/TV:/media/tv:ro"
-        "/mnt/data4/YouTube/Anime:/media/anime:rw"
-        "/mnt/data4/YouTube/K-Drama:/media/kdrama:ro"
-      ];
+      volumes = hokagoVolumes;
     };
 
-    hokago-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-hokago" ];
-      extraOptions = [
-        "--network=container:tailscale-hokago"
-      ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:3000" ];
-    };
+    hokago-proxy = proxy "hokago" 3000;
 
     # ---------------------------------------------------------
     # Portainer
     # ---------------------------------------------------------
-    tailscale-portainer = {
-      image = "tailscale/tailscale:latest";
-      environmentFiles = [ config.sops.templates."tailscale.env".path ];
-      environment = {
-        TS_HOSTNAME = "portainer";
-        TS_STATE_DIR = "/var/lib/tailscale";
-        TS_SERVE_CONFIG = "/config/serve.json";
-      };
-      volumes = [
-        "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-portainer:/var/lib/tailscale"
-        "${tsServe 9000}:/config/serve.json:ro"
-      ];
-      extraOptions = [
-        "--cap-add=NET_ADMIN"
-        "--cap-add=NET_RAW"
-      ];
-    };
+    tailscale-portainer = sidecar "portainer" 9000 { };
 
     portainer = {
       image = "portainer/portainer-ce:latest";
@@ -297,36 +260,12 @@ in
       ];
     };
 
-    portainer-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-portainer" ];
-      extraOptions = [
-        "--network=container:tailscale-portainer"
-      ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:9000" ];
-    };
+    portainer-proxy = proxy "portainer" 9000;
 
     # ---------------------------------------------------------
     # Copyparty
     # ---------------------------------------------------------
-    tailscale-copyparty = {
-      image = "tailscale/tailscale:latest";
-      environmentFiles = [ config.sops.templates."tailscale.env".path ];
-      environment = {
-        TS_HOSTNAME = "copyparty";
-        TS_STATE_DIR = "/var/lib/tailscale";
-        TS_SERVE_CONFIG = "/config/serve.json";
-      };
-      volumes = [
-        "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-copyparty:/var/lib/tailscale"
-        "${tsServe 3923}:/config/serve.json:ro"
-      ];
-      extraOptions = [
-        "--cap-add=NET_ADMIN"
-        "--cap-add=NET_RAW"
-      ];
-    };
+    tailscale-copyparty = sidecar "copyparty" 3923 { };
 
     copyparty = {
       image = "copyparty/ac:latest";
@@ -346,37 +285,13 @@ in
       ];
     };
 
-    copyparty-proxy = {
-      image = "caddy:alpine";
-      dependsOn = [ "tailscale-copyparty" ];
-      extraOptions = [
-        "--network=container:tailscale-copyparty"
-      ];
-      cmd = [ "caddy" "reverse-proxy" "--from" ":80" "--to" "127.0.0.1:3923" ];
-    };
+    copyparty-proxy = proxy "copyparty" 3923;
 
     # ---------------------------------------------------------
     # Samechan (private image -- pulled with rishabh's gh login, see
     # samechanDocker in configuration.nix)
     # ---------------------------------------------------------
-    tailscale-samechan = {
-      image = "tailscale/tailscale:latest";
-      environmentFiles = [ config.sops.templates."tailscale.env".path ];
-      environment = {
-        TS_HOSTNAME = "samechan";
-        TS_STATE_DIR = "/var/lib/tailscale";
-        TS_SERVE_CONFIG = "/config/serve.json";
-      };
-      volumes = [
-        "/dev/net/tun:/dev/net/tun"
-        "/var/lib/tailscale-samechan:/var/lib/tailscale"
-        "${tsServe 8787}:/config/serve.json:ro"
-      ];
-      extraOptions = [
-        "--cap-add=NET_ADMIN"
-        "--cap-add=NET_RAW"
-      ];
-    };
+    tailscale-samechan = sidecar "samechan" 8787 { };
 
     # Local embeddings for samechan (CPU is plenty). samechan pulls the
     # model into it on first use.
