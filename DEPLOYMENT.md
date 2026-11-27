@@ -107,7 +107,7 @@ sudo reboot-to-windows
 From Windows, run PowerShell as Administrator from this repo checkout:
 
 ```powershell
-.\tools\windows-reboot-to-nixos.ps1
+.\windows\scripts\reboot-to-nixos.ps1
 ```
 
 Both commands use UEFI BootNext/bootsequence, so the change is one-time rather

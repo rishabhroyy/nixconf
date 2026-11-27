@@ -1,0 +1,174 @@
+# yaml-language-server: $schema=https://aka.ms/configuration-dsc-schema/0.2
+#
+# Packages for the win11 guest (also booted bare-metal). Apply with:
+#   winget configure -f windows/configuration.winget
+# Apps that aren't on winget are listed in windows/README.md.
+properties:
+  configurationVersion: 0.2.0
+  resources:
+    # --- Shell & system ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: powershell
+      settings: { id: Microsoft.PowerShell, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: windows-terminal
+      settings: { id: Microsoft.WindowsTerminal, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: gsudo
+      settings: { id: gerardog.gsudo, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: oh-my-posh
+      settings: { id: JanDeDobbeleer.OhMyPosh, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: fastfetch
+      settings: { id: Fastfetch-cli.Fastfetch, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: powertoys
+      settings: { id: Microsoft.PowerToys, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: pstools
+      settings: { id: Microsoft.Sysinternals.PsTools, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: wiztree
+      settings: { id: AntibodySoftware.WizTree, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: 7zip
+      settings: { id: 7zip.7zip, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: teracopy
+      settings: { id: CodeSector.TeraCopy, source: winget }
+
+    # --- Network & remote ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: tailscale
+      settings: { id: Tailscale.Tailscale, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: parsec
+      settings: { id: Parsec.Parsec, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: termius
+      settings: { id: Termius.Termius, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: putty
+      settings: { id: PuTTY.PuTTY, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: croc
+      settings: { id: schollz.croc, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: wget
+      settings: { id: JernejSimoncic.Wget, source: winget }
+
+    # --- Dev toolchains ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: git
+      settings: { id: Git.Git, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: github-desktop
+      settings: { id: GitHub.GitHubDesktop, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: vscode
+      settings: { id: Microsoft.VisualStudioCode, source: winget }
+    # MSVC linker for the rustup msvc toolchain and native Node addons.
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: vs-build-tools
+      settings: { id: Microsoft.VisualStudio.2022.BuildTools, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: rustup
+      settings: { id: Rustlang.Rustup, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: go
+      settings: { id: GoLang.Go, source: winget }
+    # Python versions and venvs: `uv python install <ver>` (replaces pyenv-win).
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: uv
+      settings: { id: astral-sh.uv, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: nvm
+      settings: { id: CoreyButler.NVMforWindows, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: pnpm
+      settings: { id: pnpm.pnpm, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: make
+      settings: { id: ezwinports.make, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: ninja
+      settings: { id: Ninja-build.Ninja, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: nssm
+      settings: { id: NSSM.NSSM, source: winget }
+
+    # --- Media CLI ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: ffmpeg
+      settings: { id: Gyan.FFmpeg, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: yt-dlp
+      settings: { id: yt-dlp.yt-dlp, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: imagemagick
+      settings: { id: ImageMagick.ImageMagick, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: exiftool
+      settings: { id: OliverBetz.ExifTool, source: winget }
+
+    # --- Browsers (Zen is primary; the others stay as Chromium/Firefox fallbacks) ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: zen
+      settings: { id: Zen-Team.Zen-Browser, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: firefox
+      settings: { id: Mozilla.Firefox, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: brave
+      settings: { id: Brave.Brave, source: winget }
+
+    # --- Apps ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: claude
+      settings: { id: Anthropic.Claude, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: signal
+      settings: { id: OpenWhisperSystems.Signal, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: discord
+      settings: { id: Discord.Discord, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: spotify
+      settings: { id: Spotify.Spotify, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: vlc
+      settings: { id: VideoLAN.VLC, source: winget }
+    # Only used to sync local music files to the iPhone.
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: itunes
+      settings: { id: Apple.iTunes, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: creative-cloud
+      settings: { id: Adobe.CreativeCloud, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: blender
+      settings: { id: BlenderFoundation.Blender, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: kicad
+      settings: { id: KiCad.KiCad, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: nzxt-cam
+      settings: { id: NZXT.CAM, source: winget }
+
+    # --- Games ---
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: steam
+      settings: { id: Valve.Steam, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: osu
+      settings: { id: ppy.osu, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: minecraft-launcher
+      settings: { id: Mojang.MinecraftLauncher, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: modrinth
+      settings: { id: Modrinth.ModrinthApp, source: winget }
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: lunar-client
+      settings: { id: Moonsworth.LunarClient, source: winget }

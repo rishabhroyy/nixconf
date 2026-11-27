@@ -198,6 +198,8 @@ in
     HOKAGO_ACQUIRE_KEY=${config.sops.placeholder.hokago_acquire_key}
   '';
 
+  # The volume is all of /mnt/data4 (backups, keys, finances), so there's no
+  # anonymous read: every tailnet device would otherwise see all of it.
   sops.templates."copyparty.conf" = {
     owner = "rishabh";
     mode = "0400";
@@ -213,7 +215,6 @@ in
       [/]
         /w
         accs:
-          r: *
           rwmda: rishabh
         flags:
           grid

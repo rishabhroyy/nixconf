@@ -9,6 +9,7 @@ Personal NixOS configuration for the `rishabh-nix` desktop.
 - Libvirt/VFIO Windows 11 VM definition.
 - Docker services for media and admin tools.
 - Samba export for local storage.
+- `windows/`: packages, profile, and scripts for the Windows guest (see `windows/README.md`).
 
 ## Deploy
 
