@@ -163,9 +163,11 @@ class Host:
         total = info.get("MemTotal", 0)
         huge = info.get("HugePages_Total", 0) // 1024 * info.get("Hugepagesize", 0)
         free = info.get("MemFree", 0)
-        cache = info.get("Buffers", 0) + info.get("Cached", 0) + info.get("SReclaimable", 0)
-        return {"total": total, "windows": huge, "cache": cache, "free": free,
-                "used": max(0, total - free - cache - huge)}
+        # The kernel's own estimate of what it can reclaim without harm. Raw
+        # Cached would also count tmpfs/shared memory, which can't be dropped.
+        available = info.get("MemAvailable", free)
+        return {"total": total, "windows": huge, "free": free,
+                "cache": max(0, available - free), "used": max(0, total - huge - available)}
 
     def gpu(self):
         dev = f"/sys/bus/pci/devices/{self.config['gpu']}"
