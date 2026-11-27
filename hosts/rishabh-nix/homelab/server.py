@@ -27,8 +27,10 @@ STATE_FILE = "/run/homelab/state.json"
 ACTIONS = {
     "windows-start": ["systemctl", "start", "--no-block", "win11.service"],
     "windows-stop": ["systemctl", "stop", "--no-block", "win11.service"],
-    "reboot": ["systemctl", "start", "--no-block", "reboot.target"],
-    "poweroff": ["systemctl", "start", "--no-block", "poweroff.target"],
+    # Same job mode `systemctl reboot`/`poweroff` use: nothing started later
+    # can cancel parts of the shutdown.
+    "reboot": ["systemctl", "start", "--no-block", "--job-mode=replace-irreversibly", "reboot.target"],
+    "poweroff": ["systemctl", "start", "--no-block", "--job-mode=replace-irreversibly", "poweroff.target"],
     "baremetal": ["systemctl", "start", "--no-block", "homelab-baremetal.service"],
     "display-next": None,  # handled here: picks the kiosk's monitor
 }
