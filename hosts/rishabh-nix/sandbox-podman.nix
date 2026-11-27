@@ -14,7 +14,7 @@ let
 
   # Fixed addressing for the rootless network namespace's uplink, so it never
   # inherits the host's own addresses or routes (pasta copies the host's by
-  # default). Same layout slirp4netns used, so nothing inside sees a change.
+  # default).
   netnsAddr = "10.0.2.100";
   netnsPrefix = "24";
   netnsGw = "10.0.2.2";
@@ -32,6 +32,24 @@ let
   nft = "${pkgs.nftables}/bin/nft";
   grep = "${pkgs.gnugrep}/bin/grep";
   ipv4Re = "([0-9]{1,3}\\.){3}[0-9]{1,3}";
+  # The one port the stack may reach its allowlisted relays on (UDP).
+  relayPort = 51820;
+
+  # The allowlist exactly as both egress layers and guardCheck see it: valid
+  # IPv4 lines only, deduplicated. Invalid lines are reported on stderr and
+  # skipped; skipping is the safe direction (that address just becomes
+  # unreachable). Always exits 0, so it's safe under `set -e`.
+  validRelays = pkgs.writeShellScript "sandbox-valid-relays" ''
+    [ -s ${allowlistPath} ] || exit 0
+    while IFS= read -r addr || [ -n "$addr" ]; do
+      [ -n "$addr" ] || continue
+      if printf '%s' "$addr" | ${grep} -qxE '${ipv4Re}'; then
+        printf '%s\n' "$addr"
+      else
+        echo "sandbox egress allowlist: skipping invalid entry: $addr" >&2
+      fi
+    done < ${allowlistPath} | ${pkgs.coreutils}/bin/sort -u
+  '';
 
   # Canonical dump of every static rule restricting this uid, in both layers.
   # Stateless (-s), so counters never register as a change. The per-run pull
@@ -79,8 +97,8 @@ let
     printf '%s\n' "$rules" | ${pkgs.coreutils}/bin/tail -n1 | ${grep} -qE '^\s*(counter )?drop$' || bad "nft uid chain does not end in drop"
 
     # Both layers' relay sets must equal the allowlist currently on disk.
-    want="$(${grep} -xE '${ipv4Re}' ${allowlistPath} 2>/dev/null | ${pkgs.coreutils}/bin/sort -u)"
-    have_ipt="$(${ipt} -S sandbox-fw-egress | ${grep} -F -- '--dport 51820' | ${grep} -oE '${ipv4Re}' | ${pkgs.coreutils}/bin/sort -u)"
+    want="$(${validRelays} 2>/dev/null)"
+    have_ipt="$(${ipt} -S sandbox-fw-egress | ${grep} -F -- '--dport ${toString relayPort}' | ${grep} -oE '${ipv4Re}' | ${pkgs.coreutils}/bin/sort -u)"
     have_nft="$(${nft} -s list set inet ${nftTable} allow4 | ${grep} -oE '${ipv4Re}' | ${pkgs.coreutils}/bin/sort -u)"
     [ "$have_ipt" = "$want" ] || bad "iptables relay set does not match the allowlist"
     [ "$have_nft" = "$want" ] || bad "nft relay set does not match the allowlist"
@@ -234,7 +252,7 @@ let
       gw="$(${pkgs.iproute2}/bin/ip -4 route show default | ${pkgs.gawk}/bin/awk '{print $3; exit}')"
       [ -z "$gw" ] || targets="$targets udp,$gw,53 tcp,$gw,53"
       # An allowlisted address on anything other than the one allowed port.
-      relay="$(${grep} -m1 -xE '${ipv4Re}' ${allowlistPath} 2>/dev/null || true)"
+      relay="$(${validRelays} 2>/dev/null | ${pkgs.coreutils}/bin/head -n1)"
       [ -z "$relay" ] || targets="$targets udp,$relay,53 tcp,$relay,443"
       for addr in ''${reg_ips:-}; do targets="$targets tcp,$addr,443"; done
 
@@ -354,21 +372,8 @@ in
   networking.firewall.extraCommands = ''
     sandbox_uid=$(id -u svc-sandbox 2>/dev/null) || sandbox_uid=""
     if [ -n "$sandbox_uid" ]; then
-      # One validated list feeds both layers. This whole script runs under
-      # `set -e` (sourced into firewall-start), so a malformed line is
-      # skipped rather than aborting the entire firewall reload; skipping is
-      # the safe direction (that one address just becomes unreachable).
-      relays=""
-      if [ -s "${allowlistPath}" ]; then
-        while IFS= read -r addr; do
-          [ -n "$addr" ] || continue
-          if ! printf '%s' "$addr" | grep -qxE '${ipv4Re}'; then
-            echo "sandbox egress allowlist: skipping invalid entry: $addr" >&2
-            continue
-          fi
-          relays="$relays $addr"
-        done < "${allowlistPath}"
-      fi
+      # One validated list feeds both layers (see validRelays).
+      relays="$(${validRelays} | ${pkgs.coreutils}/bin/tr '\n' ' ')"
 
       # --- layer 2: nftables -------------------------------------------
       # Applied as one atomic transaction (create-if-missing, delete,
@@ -397,7 +402,7 @@ in
       }
       chain uid_out {
         meta nfproto ipv6 drop
-        ip daddr @allow4 udp dport 51820 accept
+        ip daddr @allow4 udp dport ${toString relayPort} accept
         ip daddr @pull4 tcp dport 443 accept
         oifname { "docker0", "lo" } tcp sport ${toString appPort} ct state established accept
         counter drop
@@ -428,7 +433,7 @@ in
         iptables -A sandbox-fw-egress-staging -o "$oif" -p tcp --sport ${toString appPort} -m conntrack --ctstate ESTABLISHED -j ACCEPT
       done
       for addr in $relays; do
-        iptables -A sandbox-fw-egress-staging -p udp -d "$addr" --dport 51820 -j ACCEPT
+        iptables -A sandbox-fw-egress-staging -p udp -d "$addr" --dport ${toString relayPort} -j ACCEPT
       done
       iptables -A sandbox-fw-egress-staging -j DROP
 
