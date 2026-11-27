@@ -55,9 +55,9 @@ in
 
   powerManagement.cpuFreqGovernor = "performance";
 
-  # AVIC as a normal KVM acceleration path. nested=1 is inert while the guest
-  # has SVM hidden (see SVM_FEATURE).
-  boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
+  # AVIC as a normal KVM acceleration path. No nested virtualization: SVM is
+  # hidden from the guest (see SVM_FEATURE), so it could never use it.
+  boot.extraModprobeConfig = "options kvm_amd nested=0 avic=1";
 
   # Load VFIO early so dedicated passthrough devices never bind to host drivers.
   boot.initrd.kernelModules = [
@@ -125,8 +125,8 @@ in
     };
   };
 
-  # Permit only the low real-time priority requested by the isolated guest
-  # vCPUs. Host work and shared guest vCPUs retain normal scheduling.
+  # Permit only the low real-time priority requested for the win11 emulator
+  # thread (emulatorsched in the template).
   systemd.services.libvirtd.serviceConfig.LimitRTPRIO = 1;
 
   services.udev.extraRules = ''
@@ -462,7 +462,6 @@ EOF
       <reset state='on'/>
       <vendor_id state='on' value='GenuineIntel'/>
       <frequencies state='on'/>
-      <reenlightenment state='on'/>
       <tlbflush state='on'/>
       <ipi state='on'/>
       <avic state='on'/>
@@ -741,13 +740,12 @@ EOF
       echo
       echo "== CPU / Hypervisor Masking =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "poll-control state='on'" || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q '<hyperv'; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|avic' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|tlbflush|ipi|avic' || true
       ${pkgs.coreutils}/bin/printf 'hypervclock-timer='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q "timer name='hypervclock'"; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
 
@@ -783,7 +781,7 @@ EOF
       echo
       echo "== CPU affinity =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<vcpu|<topology' || true
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|vcpusched|emulatorsched' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'vcpupin|emulatorpin|emulatorsched' || true
       ${pkgs.coreutils}/bin/printf 'libvirtd-rtprio-limit='
       ${pkgs.systemd}/bin/systemctl show libvirtd.service --property=LimitRTPRIO --value || true
       ${pkgs.coreutils}/bin/printf 'kernel-command-line='

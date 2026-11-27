@@ -61,14 +61,13 @@ Routine boot never rewrites the VM's persistent OVMF NVRAM. Secure Boot key
 enrollment is an explicit maintenance action through
 `sudo enroll-win11-secureboot-keys`, not part of domain definition or autostart.
 
-The VM keeps an 8-core / 16-thread topology. Four physical cores remain shared
-with NixOS, while four are isolated for latency-sensitive guest work. Only the
-vCPU threads pinned to isolated cores use low-priority real-time round-robin
-scheduling; QEMU housekeeping and host workloads keep normal scheduling.
-Windows' first four guest cores map to the isolated cores so foreground work,
-device interrupts, and DPCs are more likely to avoid host scheduling jitter.
-KVM poll-control briefly waits for guest wakeups to avoid some scheduler
-round trips, and `rcu_nocb_poll` prevents offloaded RCU callback processing
+The VM has 8 vCPUs in a 4-core / 8-thread topology, pinned one-to-one to the
+isolated CPUs (physical cores 4-7 and their SMT siblings, see
+`hosts/rishabh-nix/cpu-layout.nix`). NixOS and the QEMU emulator thread keep
+the housekeeping CPUs. Only the emulator thread uses low-priority real-time
+round-robin scheduling, so containers on the same CPUs can't delay its VFIO
+interrupt forwarding; the vCPU threads use normal scheduling on their
+dedicated CPUs. `rcu_nocb_poll` prevents offloaded RCU callback processing
 from repeatedly waking the isolated guest CPUs. The host NMI watchdog remains
 enabled for hard-lockup diagnosis.
 

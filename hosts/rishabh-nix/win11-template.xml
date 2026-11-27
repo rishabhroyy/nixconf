@@ -21,13 +21,13 @@
     <vcpupin vcpu='6' cpuset='7'/>
     <vcpupin vcpu='7' cpuset='15'/>
     <emulatorpin cpuset='$HOUSEKEEPING_CPUS'/>
-    <!-- Same low-priority RT class as the vCPU threads. Without this the
-         emulator thread (which forwards every VFIO interrupt for the
-         passthrough GPU/NVMe/SATA/USB devices) is plain SCHED_OTHER and
-         queues behind whatever Docker container happens to be busy on the
-         same housekeeping cores, e.g. hokago-worker's ffmpeg sweeps. -->
+    <!-- Low-priority RT for the emulator thread only. It forwards every VFIO
+         interrupt for the passthrough GPU/NVMe/SATA/USB devices and shares the
+         housekeeping cores with Docker, so as plain SCHED_OTHER it would queue
+         behind e.g. hokago-worker's ffmpeg sweeps. The vCPU threads stay
+         SCHED_OTHER: each already has an isolated CPU to itself, so RT can't
+         help them and would only delay per-CPU kernel work there. -->
     <emulatorsched scheduler='rr' priority='1'/>
-    <vcpusched vcpus='0-7' scheduler='rr' priority='1'/>
   </cputune>
   <os>
     <type arch='x86_64' machine='pc-q35-8.2'>hvm</type>
@@ -76,9 +76,6 @@
 $HYPERV_FEATURES
     <kvm>
       <hidden state='on'/>
-      <!-- Briefly poll for guest wakeups to avoid scheduler round trips on
-           latency-sensitive I/O completions. -->
-      <poll-control state='on'/>
     </kvm>
     <ioapic driver='kvm'/>
   </features>
@@ -203,6 +200,9 @@ $HYPERVCLOCK_TIMER
       <source bridge='br0'/>
       <mac address='14:5d:34:c1:14:5e'/>
       <model type='virtio'/>
+      <!-- 4 queues so Windows' NetKVM RSS spreads traffic across vCPUs
+           instead of handling all of it on one. -->
+      <driver name='vhost' queues='4'/>
     </interface>
 
     <!-- Keep the guest memory layout static; no balloon device. -->

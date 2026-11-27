@@ -17,9 +17,11 @@ Current stable profile for the `win11` libvirt domain.
 - All 8 vCPUs are pinned to the isolated CPUs 4-7/12-15 (physical cores 4-7
   plus their SMT siblings); CPUs 0-3/8-11 stay with NixOS and the QEMU
   emulator threads.
-- The vCPU and emulator threads use low-priority real-time round-robin
-  scheduling (priority 1).
-- KVM poll-control reduces scheduler round trips for short guest wakeups.
+- The QEMU emulator thread uses low-priority real-time round-robin
+  scheduling (priority 1) so it isn't queued behind containers on the
+  housekeeping CPUs; the vCPU threads use normal scheduling on their
+  dedicated isolated CPUs.
+- virtio-net uses 4 vhost queues (NetKVM RSS).
 - `kvm.halt_poll_ns=500000` and the C2 idle state disabled on cores 4-7/12-15
   (`disable-win11-core-cstates.service`) to keep guest wakeups cheap.
 - Isolated cores 4-7/12-15 pinned to their max P-state
@@ -47,8 +49,8 @@ Current stable profile for the `win11` libvirt domain.
   at boot trying to launch Hyper-V.
 - SVM hidden from the guest, so VBS/HVCI, WSL2, and Hyper-V can't run nested
   inside the VM. Bare-metal Windows is unaffected and keeps VBS.
-- KVM IOAPIC and AVIC. `kvm_amd nested=1` is set; it's inert while SVM is
-  hidden from the guest.
+- KVM IOAPIC and AVIC. `kvm_amd nested=0`: SVM is hidden from the guest, so
+  nested virtualization could never be used.
 - VFIO passthrough for the configured GPU, storage, and USB controllers.
 - The 2.5GbE NIC is host-owned (bridged as `br0`) instead of raw PCI
   passthrough, so NixOS (`10.0.0.3`, MAC cloned from the old 1G NIC, which is
