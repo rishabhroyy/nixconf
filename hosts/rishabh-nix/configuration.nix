@@ -303,26 +303,6 @@ in
     "d /var/lib/copyparty 0755 1000 100 -"
   ];
 
-  systemd.services.docker-copyparty = lib.mkIf (!recoveryMode) {
-    after = [ "mnt-data4.mount" ];
-    requires = [ "mnt-data4.mount" ];
-  };
-
-  systemd.services.docker-immich-server = lib.mkIf (!recoveryMode) {
-    after = [ "mnt-data4.mount" ];
-    requires = [ "mnt-data4.mount" ];
-  };
-
-  systemd.services.docker-hokago = lib.mkIf (!recoveryMode) {
-    after = [ "mnt-data4.mount" ];
-    requires = [ "mnt-data4.mount" ];
-  };
-
-  systemd.services.docker-hokago-worker = lib.mkIf (!recoveryMode) {
-    after = [ "mnt-data4.mount" ];
-    requires = [ "mnt-data4.mount" ];
-  };
-
   # samechan's image is private: let this unit's `docker run` pull it with the gh helper above
   systemd.services.docker-samechan = lib.mkIf (!recoveryMode) {
     path = [ ghcrHelper ];

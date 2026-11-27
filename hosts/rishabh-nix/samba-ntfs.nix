@@ -1,11 +1,8 @@
-{ ... }:
+{ lib, ... }:
 
 {
   # Ensure the modern ntfs3 driver is supported and used
   boot.supportedFilesystems = [ "ntfs" ];
-
-  # The 1TB SATA SSD has been removed from here and passed directly to the Windows VM.
-  # We are only keeping the 4TB HDD (DATA4) on Linux.
 
   fileSystems."/mnt/data4" = {
     # 4TB HDD UUID
@@ -21,8 +18,7 @@
     ];
   };
 
-  # Samba share for the local LAN, including the Windows VM when it is attached
-  # through the physical network.
+  # Samba share for the LAN (10.0.0.0/24), which includes the win11 VM on br0.
   services.samba = {
     enable = true;
     openFirewall = true;
@@ -32,9 +28,8 @@
         "server string" = "rishabh-nix Samba";
         "netbios name" = "rishabh-nix";
         "security" = "user";
-        # Allow access from the local LAN (VM will be on the LAN via the physical router)
-        "hosts allow" = "192.168. 10. 172.16. 127.";
-        
+        "hosts allow" = "10.0.0. 127.";
+
         # --- High Performance HDD / Gaming Optimizations ---
         "server multi channel support" = "yes";
         "server min protocol" = "SMB3";
@@ -60,13 +55,19 @@
     };
   };
 
-  # Do not export an empty directory on the root filesystem when DATA4 is
-  # unavailable. The container services that consume this disk use the same
-  # fail-closed mount dependency.
-  systemd.services.samba-smbd = {
+  # Everything that uses /mnt/data4 waits for it and stays down if it can't
+  # mount, so nothing serves or writes into the empty mountpoint on the root
+  # disk instead.
+  systemd.services = lib.genAttrs [
+    "samba-smbd"
+    "docker-copyparty"
+    "docker-immich-server"
+    "docker-hokago"
+    "docker-hokago-worker"
+  ] (_: {
     after = [ "mnt-data4.mount" ];
     requires = [ "mnt-data4.mount" ];
-  };
+  });
 
   # Samba requires a user password to be set up manually using `smbpasswd -a rishabh`
 }
