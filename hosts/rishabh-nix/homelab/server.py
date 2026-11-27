@@ -30,7 +30,17 @@ ACTIONS = {
     "reboot": ["systemctl", "start", "--no-block", "reboot.target"],
     "poweroff": ["systemctl", "start", "--no-block", "poweroff.target"],
     "baremetal": ["systemctl", "start", "--no-block", "homelab-baremetal.service"],
+    "display-next": None,  # handled here: picks the kiosk's monitor
 }
+
+
+def next_output(outputs, current):
+    """The monitor after `current`; the kiosk defaults to the first."""
+    if not outputs:
+        return None
+    if current not in outputs:
+        current = outputs[0]
+    return outputs[(outputs.index(current) + 1) % len(outputs)]
 
 
 def read(path, default=None):
@@ -63,8 +73,9 @@ def parse_systemctl_show(text):
 class Host:
     """Samples the real machine every 2 s in a background thread."""
 
-    def __init__(self, config):
+    def __init__(self, config, state_dir):
         self.config = config
+        self.display_file = Path(state_dir) / "display"
         self.snapshot = {}
         self.lock = threading.Lock()
         self.prev_cpu = None
@@ -102,7 +113,20 @@ class Host:
 
     def status(self):
         with self.lock:
-            return {**self.state(), **self.snapshot}
+            return {**self.state(), **self.snapshot, "display": self.display()}
+
+    def outputs(self):
+        """Connected monitors on the GPU, named like wlroots names them (DP-1)."""
+        names = []
+        for status in glob.glob(f"/sys/bus/pci/devices/{self.config['gpu']}/drm/card*/card*-*/status"):
+            if read(status) == "connected":
+                names.append(Path(status).parent.name.split("-", 1)[1])
+        return sorted(names)
+
+    def display(self):
+        outputs = self.outputs()
+        current = read(self.display_file)
+        return {"outputs": outputs, "current": current if current in outputs else (outputs or [None])[0]}
 
     def cpu(self):
         cur = {}
@@ -197,6 +221,12 @@ class Host:
                 for name, us in sorted(stacks.items())]
 
     def act(self, action):
+        if action == "display-next":
+            target = next_output(self.outputs(), read(self.display_file))
+            if not target:
+                return False, "no monitor connected"
+            self.display_file.write_text(target + "\n")
+            return True, ""
         res = subprocess.run(ACTIONS[action], capture_output=True, text=True, timeout=15)
         return res.returncode == 0, res.stderr.strip()
 
@@ -208,6 +238,7 @@ class Demo:
 
     def __init__(self, fail):
         self.fail = fail
+        self.screen = "DP-1"
         self.state = {"mode": "homelab", "message": "", "since": time.time() - 3 * 3600}
         self.t0 = time.time()
         self.lock = threading.Lock()
@@ -225,6 +256,8 @@ class Demo:
 
     def act(self, action):
         mode = self.state["mode"]
+        if action == "display-next":
+            self.screen = next_output(["DP-1", "HDMI-A-1"], self.screen)
         if action == "windows-start" and mode in ("homelab", "error"):
             steps = [(0, "starting", "Handing the GPU to Windows"), (1.6, "starting", "Reserving memory"),
                      (1.4, "starting", "Booting Windows")]
@@ -264,6 +297,7 @@ class Demo:
             "net": {"rx": abs(1.8e6 * math.sin(t / 6)) + 2e4, "tx": abs(4e5 * math.sin(t / 9)) + 1e4},
             "disks": [{"mount": "/", "total": 931 * gib, "used": 402 * gib},
                       {"mount": "/mnt/data4", "total": 3726 * gib, "used": 3120 * gib}],
+            "display": {"outputs": ["DP-1", "HDMI-A-1"], "current": self.screen},
             "stacks": [{"name": n, "state": "partial" if n == "hokago" and int(t / 20) % 3 == 2 else "running"}
                        for n in self.STACKS],
         }
@@ -339,6 +373,10 @@ def selftest():
         assert allowed_host(ok), ok
     for bad in ("evil.com", "rishabh-nix.evil.com", "rishabh-nix.x.ts.net.evil.com", "cafe", "", None):
         assert not allowed_host(bad), bad
+    assert next_output(["DP-1", "HDMI-A-1"], None) == "HDMI-A-1"
+    assert next_output(["DP-1", "HDMI-A-1"], "HDMI-A-1") == "DP-1"
+    assert next_output(["DP-1"], "gone") == "DP-1"
+    assert next_output([], None) is None
     print("selftest ok")
 
 
@@ -348,6 +386,7 @@ def main():
     ap.add_argument("--config", help="JSON from homelab.nix (real mode)")
     ap.add_argument("--demo", action="store_true", help="fake machine, for previewing the design")
     ap.add_argument("--demo-fail", action="store_true", help="demo: make Start Windows fail")
+    ap.add_argument("--state-dir", default=".", help="where the chosen monitor is remembered (real mode)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -355,7 +394,7 @@ def main():
     if args.demo:
         backend = Demo(args.demo_fail)
     else:
-        backend = Host(json.loads(Path(args.config).read_text()))
+        backend = Host(json.loads(Path(args.config).read_text()), args.state_dir)
     server = ThreadingHTTPServer(("", args.port), handler(backend))
     print(f"homelab dashboard on http://localhost:{args.port}/", flush=True)
     server.serve_forever()

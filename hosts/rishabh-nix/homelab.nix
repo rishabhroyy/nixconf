@@ -331,13 +331,40 @@ in
     user = "kiosk";
     environment.WLR_DRM_DEVICES = "/dev/dri/homelab-gpu";
     program = pkgs.writeShellScript "homelab-kiosk" ''
-      until ${pkgs.curl}/bin/curl -sf -o /dev/null http://127.0.0.1/; do sleep 1; done
+      PATH=${lib.makeBinPath (with pkgs; [ coreutils gnugrep gawk wlr-randr curl ])}
+
+      # cage stretches the window across every monitor. Keep only the one
+      # picked on the dashboard (/var/lib/homelab-dashboard/display, first
+      # monitor by name if unset) and switch the rest off; re-checked every
+      # 2 s, so a pick or a hotplug applies on its own.
+      (
+        APPLIED=""
+        while :; do
+          OUTPUTS="$(wlr-randr | awk '/^[^ ]/ { print $1 }' | sort)"
+          WANT="$(cat /var/lib/homelab-dashboard/display 2>/dev/null)"
+          printf '%s\n' "$OUTPUTS" | grep -qx "$WANT" || WANT="$(printf '%s\n' "$OUTPUTS" | head -n1)"
+          KEY="$WANT $(echo $OUTPUTS)"
+          if [ -n "$OUTPUTS" ] && [ "$KEY" != "$APPLIED" ]; then
+            ARGS=""
+            for O in $OUTPUTS; do
+              if [ "$O" = "$WANT" ]; then ARGS="$ARGS --output $O --on"; else ARGS="$ARGS --output $O --off"; fi
+            done
+            wlr-randr $ARGS && APPLIED="$KEY"
+          fi
+          sleep 2
+        done
+      ) &
+
+      until curl -sf -o /dev/null http://127.0.0.1/; do sleep 1; done
       exec ${pkgs.chromium}/bin/chromium \
         --kiosk --ozone-platform=wayland --no-first-run --noerrdialogs \
         --disable-infobars --disable-features=Translate --password-store=basic \
         --check-for-update-interval=31536000 \
         --renderer-process-limit=1 --disable-extensions \
         --disable-background-networking --disable-component-update \
+        --hide-scrollbars \
+        --disable-background-timer-throttling --disable-renderer-backgrounding \
+        --disable-backgrounding-occluded-windows \
         http://127.0.0.1/
     '';
   };
@@ -368,7 +395,7 @@ in
     after = [ "network.target" ];
     path = [ pkgs.systemd ];
     serviceConfig = {
-      ExecStart = "${pkgs.python3}/bin/python3 ${./homelab}/server.py --port 80 --config ${
+      ExecStart = "${pkgs.python3}/bin/python3 ${./homelab}/server.py --port 80 --state-dir /var/lib/homelab-dashboard --config ${
         pkgs.writeText "homelab.json" (builtins.toJSON {
           inherit gpu;
           vmCpus = cpus.isolatedList;
@@ -376,6 +403,9 @@ in
           stacks = lib.genAttrs stacks.names stacks.units;
         })
       }";
+      # Remembers the kiosk's monitor; readable by the kiosk user.
+      StateDirectory = "homelab-dashboard";
+      StateDirectoryMode = "0755";
       User = "homelab";
       Group = "homelab";
       AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];

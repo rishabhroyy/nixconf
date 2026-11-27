@@ -53,6 +53,9 @@ in
   boot.loader.efi.canTouchEfiVariables = true;
 
   networking.hostName = "rishabh-nix";
+  # Was unset (UTC): the dashboard clock, journal and timers (autoUpgrade's
+  # 04:00, weekly gc/prune) now run on local time. The clock itself is NTP.
+  time.timeZone = "America/Los_Angeles";
 
   # The 2.5GbE NIC (10ec:8125, PCI 0000:29:00.0, enp41s0) is host-owned and
   # bridged as br0 so NixOS and the win11 VM can both use it at once -- the

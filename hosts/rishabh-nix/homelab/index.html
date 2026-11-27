@@ -198,6 +198,15 @@
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
   }
   .power:hover { color: var(--text); border-color: var(--line); }
+  .screen {
+    margin-right: auto;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 0.65rem;
+    padding: 0.55rem 0.95rem;
+    color: var(--muted);
+  }
+  .screen:hover { color: var(--text); background: var(--panel-2); }
   .power.armed { color: var(--coral); border-color: var(--coral); background: #2a1a1e; }
 
   @media (max-width: 1100px) {
@@ -218,6 +227,7 @@
     .thread { height: 3.4rem; border-radius: 0.4rem; }
     footer { justify-content: stretch; }
     .power { flex: 1; border-color: var(--line); }
+    .screen { flex-basis: 100%; margin-right: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }
@@ -284,6 +294,7 @@
   </main>
 
   <footer>
+    <button class="screen" id="screen" type="button" hidden>Move to other screen</button>
     <button class="power" data-action="baremetal" data-confirm="Tap again to boot Windows directly" title="Restart the computer into Windows itself, without Linux" type="button">Boot Windows directly</button>
     <button class="power" data-action="reboot" data-confirm="Tap again to restart" type="button">Restart</button>
     <button class="power" data-action="poweroff" data-confirm="Tap again to power off" type="button">Power off</button>
@@ -465,6 +476,9 @@ function render(s) {
   renderNet(s.net);
   renderServices(s.stacks);
   renderDisks(s.disks);
+  const outs = s.display?.outputs || [];
+  $("screen").hidden = outs.length < 2;
+  $("screen").title = s.display?.current ? `The dashboard is on ${s.display.current}` : "";
 }
 
 async function poll() {
@@ -500,6 +514,8 @@ $("win-btn").addEventListener("click", () => {
   renderWindows(last);
   act(pending).then(poll);
 });
+
+$("screen").addEventListener("click", () => act("display-next").then(poll));
 
 // Power buttons: first tap arms, second tap within 4 s acts.
 document.querySelectorAll(".power").forEach((b) => {
