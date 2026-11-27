@@ -345,7 +345,8 @@ in
     wantedBy = [ "homelab.target" ];
     partOf = [ "homelab.target" ];
     after = [ "homelab-dashboard.service" ];
-    unitConfig.ConditionPathExists = "!${windowsMarker}";
+    # Keeps cage.nix's own /dev/tty1 condition; repeated conditions are ANDed.
+    unitConfig.ConditionPathExists = lib.mkForce [ "/dev/tty1" "!${windowsMarker}" ];
     serviceConfig = {
       Restart = "always";
       RestartSec = "3s";
