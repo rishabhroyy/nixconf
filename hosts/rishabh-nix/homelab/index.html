@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c1622">
+<title>rishabh-nix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0c1622;
+    --panel: #13202f;
+    --panel-2: #1a2a3c;
+    --line: #24364a;
+    --text: #e6ecf1;
+    --muted: #7c90a4;
+    --amber: #f0a94b;
+    --amber-dim: #8a6a3a;
+    --blue: #4c9bff;
+    --blue-dim: #2b4f80;
+    --coral: #ff6f61;
+    --ok: #7fcf9a;
+    --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+    --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { font-size: clamp(15px, 0.55vw + 8px, 22px); }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--ink);
+    color: var(--text);
+    font-family: var(--body);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 120rem;
+    margin: 0 auto;
+    padding: 1.75rem 2rem 1.5rem;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    gap: 1.75rem;
+  }
+  h1, h2, .display { font-family: var(--display); font-weight: 600; margin: 0; }
+  h2 { font-size: 1rem; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; margin-bottom: 0.9rem; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+
+  /* Header */
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+  .who h1 { font-size: 1.7rem; letter-spacing: -0.01em; }
+  .who p { margin: 0.15rem 0 0; color: var(--muted); }
+  .who .mode { color: var(--text); margin-right: 0.6rem; }
+  .clock { font-family: var(--display); font-size: 3.4rem; font-weight: 500; line-height: 0.9; letter-spacing: -0.03em; }
+  .clock small { display: block; text-align: right; font-family: var(--body); font-size: 0.85rem; letter-spacing: 0; color: var(--muted); margin-top: 0.45rem; }
+  .offline { color: var(--coral); }
+
+  /* Grid */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: 1.75rem 2.25rem;
+    align-content: start;
+  }
+  .windows { grid-column: span 4; }
+  .cores { grid-column: span 8; }
+  .memory { grid-column: span 6; }
+  .gpu { grid-column: span 3; }
+  .net { grid-column: span 3; }
+  .services { grid-column: span 6; }
+  .storage { grid-column: span 6; }
+
+  /* Windows control: the one filled surface on the page */
+  .windows {
+    background: var(--panel);
+    border-radius: 1.1rem;
+    padding: 1.6rem 1.6rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    border: 1px solid var(--line);
+    transition: border-color 0.6s ease, background-color 0.6s ease;
+  }
+  .windows[data-mode="windows"], .windows[data-mode="stopping"] { border-color: var(--blue-dim); background: #12233a; }
+  .windows[data-mode="error"], .windows[data-mode="crashed"] { border-color: #6b3a37; }
+  .windows .state { font-family: var(--display); font-size: 2.6rem; line-height: 1; letter-spacing: -0.02em; font-weight: 600; }
+  .windows .detail { margin: 0; color: var(--muted); min-height: 2.9em; }
+  .windows[data-mode="error"] .detail, .windows[data-mode="crashed"] .detail { color: var(--coral); }
+  .primary {
+    width: 100%;
+    border: 0;
+    border-radius: 0.8rem;
+    padding: 1.05rem 1.2rem;
+    font-size: 1.2rem;
+    font-weight: 600;
+    background: var(--blue);
+    color: #071423;
+    transition: transform 0.12s ease, background-color 0.3s ease, opacity 0.3s ease;
+  }
+  .primary:hover { background: #69abff; }
+  .primary:active { transform: scale(0.985); }
+  .primary.stop { background: var(--panel-2); color: var(--text); border: 1px solid var(--blue-dim); }
+  .primary.stop:hover { background: #22364d; }
+  .primary:disabled { opacity: 0.55; cursor: default; transform: none; }
+  .steps { display: flex; gap: 0.35rem; }
+  .steps i { flex: 1; height: 0.22rem; border-radius: 1rem; background: var(--line); transition: background-color 0.4s ease; }
+  .steps i.on { background: var(--blue); }
+
+  /* CPU map */
+  .map { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.55rem; }
+  .core { display: flex; flex-direction: column; gap: 0.55rem; }
+  .thread {
+    position: relative;
+    height: 4.6rem;
+    border-radius: 0.55rem;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  .thread .fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: var(--load, 0%);
+    background: linear-gradient(to top, var(--amber), color-mix(in srgb, var(--amber) 70%, #fff3));
+    transition: height 1.8s ease, background 0.6s ease;
+    transition-delay: 0s, var(--d, 0s);
+  }
+  .core.vm.win .thread { background: #12233a; }
+  .core.vm.win .fill { background: linear-gradient(to top, var(--blue), color-mix(in srgb, var(--blue) 70%, #fff3)); }
+  .core-label { text-align: center; color: var(--muted); font-size: 0.8rem; }
+  .bracket {
+    grid-column: 5 / span 4;
+    border-top: 2px solid var(--line);
+    padding-top: 0.45rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    transition: border-color 0.6s ease, color 0.6s ease;
+  }
+  .bracket.win { border-color: var(--blue); color: var(--blue); }
+  .map-foot { display: flex; gap: 2.2rem; margin-top: 1.1rem; }
+
+  /* Figures */
+  .fig { display: flex; flex-direction: column; }
+  .fig b { font-family: var(--display); font-size: 1.9rem; font-weight: 600; line-height: 1.05; letter-spacing: -0.02em; }
+  .fig b small { font-size: 0.55em; font-weight: 500; color: var(--muted); margin-left: 0.15em; letter-spacing: 0; }
+  .fig span { color: var(--muted); font-size: 0.85rem; }
+  .figs { display: flex; flex-wrap: wrap; gap: 1rem 2.2rem; }
+
+  /* Bars */
+  .bar { display: flex; height: 0.9rem; border-radius: 1rem; overflow: hidden; background: var(--panel); gap: 2px; }
+  .bar i { display: block; height: 100%; transition: width 1.2s ease; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.4rem; margin-top: 0.75rem; font-size: 0.9rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--muted); }
+  .legend span b { color: var(--text); font-weight: 500; }
+  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; flex: none; }
+  .k-used { background: var(--amber); }
+  .k-cache { background: var(--amber-dim); }
+  .k-win { background: var(--blue); }
+
+  .gpu .away, .gpu .none { color: var(--muted); margin: 0; }
+  .gpu .away b { color: var(--blue); font-weight: 500; }
+  .vram { margin-top: 0.9rem; }
+  .vram .bar { height: 0.5rem; }
+  .vram p { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.85rem; }
+
+  /* Services */
+  .svc { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: 0.55rem 1.5rem; }
+  .svc li { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
+  .svc .name { font-weight: 500; }
+  .svc .st { font-size: 0.85rem; color: var(--muted); display: inline-flex; align-items: center; gap: 0.4rem; }
+  .st[data-s="running"] .dot { background: var(--ok); }
+  .st[data-s="partial"] .dot { background: var(--amber); }
+  .st[data-s="failed"] .dot { background: var(--coral); }
+  .st[data-s="failed"] { color: var(--coral); }
+  .st[data-s="stopped"] .dot { background: var(--line); }
+
+  .disk + .disk { margin-top: 1rem; }
+  .disk .row { display: flex; justify-content: space-between; margin-bottom: 0.4rem; }
+  .disk .row span { color: var(--muted); }
+  .disk .bar { height: 0.5rem; }
+  .disk .bar i { background: var(--muted); }
+  .disk.full .bar i { background: var(--amber); }
+
+  /* Power */
+  footer { display: flex; justify-content: flex-end; gap: 0.6rem; flex-wrap: wrap; }
+  .power {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.65rem;
+    padding: 0.55rem 0.95rem;
+    color: var(--muted);
+    transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+  }
+  .power:hover { color: var(--text); border-color: var(--line); }
+  .power.armed { color: var(--coral); border-color: var(--coral); background: #2a1a1e; }
+
+  @media (max-width: 1100px) {
+    .windows { grid-column: span 12; }
+    .cores { grid-column: span 12; }
+    .memory, .services, .storage { grid-column: span 12; }
+    .gpu, .net { grid-column: span 6; }
+  }
+  @media (max-width: 640px) {
+    .wrap { padding: 1.1rem 1rem 1.2rem; gap: 1.4rem; }
+    main { gap: 1.6rem; }
+    .gpu, .net { grid-column: span 12; }
+    .clock { font-size: 2.3rem; }
+    .who h1 { font-size: 1.35rem; }
+    .windows .state { font-size: 2.1rem; }
+    .map { gap: 0.3rem; }
+    .core { gap: 0.3rem; }
+    .thread { height: 3.4rem; border-radius: 0.4rem; }
+    footer { justify-content: stretch; }
+    .power { flex: 1; border-color: var(--line); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="who">
+      <h1 id="host">rishabh-nix</h1>
+      <p><span class="mode" id="mode-line">Homelab mode</span> <span id="uptime"></span></p>
+    </div>
+    <div class="clock" id="clock">--:--<small id="date"></small></div>
+  </header>
+
+  <main>
+    <section class="windows" id="win" data-mode="homelab" aria-live="polite">
+      <h2>Windows</h2>
+      <div class="state" id="win-state">Off</div>
+      <p class="detail" id="win-detail">Takes the graphics card, 4 cores and 16 GB while it runs.</p>
+      <div class="steps" id="steps" hidden><i></i><i></i><i></i><i></i></div>
+      <button class="primary" id="win-btn" type="button">Start Windows</button>
+    </section>
+
+    <section class="cores">
+      <h2>Processor</h2>
+      <div class="map" id="map"></div>
+      <div class="map-foot figs">
+        <div class="fig"><b id="cpu-avg">0<small>%</small></b><span>average load</span></div>
+        <div class="fig"><b id="cpu-temp">–<small>°C</small></b><span>temperature</span></div>
+        <div class="fig"><b id="cpu-host">16</b><span>threads for Linux</span></div>
+      </div>
+    </section>
+
+    <section class="memory">
+      <h2>Memory</h2>
+      <div class="bar" id="mem-bar"><i class="k-used"></i><i class="k-cache"></i><i class="k-win"></i></div>
+      <div class="legend" id="mem-legend"></div>
+    </section>
+
+    <section class="gpu">
+      <h2>Radeon RX 6700 XT</h2>
+      <div id="gpu"></div>
+    </section>
+
+    <section class="net">
+      <h2>Network</h2>
+      <div class="figs">
+        <div class="fig"><b id="rx">0</b><span>down</span></div>
+        <div class="fig"><b id="tx">0</b><span>up</span></div>
+      </div>
+    </section>
+
+    <section class="services">
+      <h2>Services</h2>
+      <ul class="svc" id="svc"></ul>
+    </section>
+
+    <section class="storage">
+      <h2>Storage</h2>
+      <div id="disks"></div>
+    </section>
+  </main>
+
+  <footer>
+    <button class="power" data-action="baremetal" data-confirm="Tap again to boot Windows directly" title="Restart the computer into Windows itself, without Linux" type="button">Boot Windows directly</button>
+    <button class="power" data-action="reboot" data-confirm="Tap again to restart" type="button">Restart</button>
+    <button class="power" data-action="poweroff" data-confirm="Tap again to power off" type="button">Power off</button>
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const VM_CORES = [4, 5, 6, 7];
+const GiB = 1024 ** 3;
+let last = null;
+let pending = null;   // action sent, waiting for the state to catch up
+
+const gb = (b) => (b / GiB).toFixed(b >= 100 * GiB ? 0 : 1);
+const rate = (b) => b >= 1e6 ? [(b / 1e6).toFixed(1), "MB/s"] : [(b / 1e3).toFixed(0), "kB/s"];
+const span = (s) => {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// Physical core c has threads c and c+8.
+function buildMap() {
+  const map = $("map");
+  for (let c = 0; c < 8; c++) {
+    const col = document.createElement("div");
+    col.className = "core" + (VM_CORES.includes(c) ? " vm" : "");
+    col.style.setProperty("--d", `${(c - 4) * 0.12}s`);
+    for (const t of [c, c + 8]) {
+      col.insertAdjacentHTML("beforeend", `<div class="thread" title="CPU ${t}"><div class="fill"></div></div>`);
+    }
+    col.insertAdjacentHTML("beforeend", `<div class="core-label">${c}</div>`);
+    map.appendChild(col);
+  }
+  map.insertAdjacentHTML("beforeend", `<div class="bracket" id="bracket">Used by Windows while it runs</div>`);
+}
+
+const STEPS = ["Handing the GPU to Windows", "Reserving memory", "Booting Windows"];
+
+function renderWindows(s) {
+  const mode = s.mode;
+  const box = $("win"), btn = $("win-btn"), detail = $("win-detail"), steps = $("steps");
+  box.dataset.mode = mode;
+  steps.hidden = mode !== "starting";
+  btn.disabled = false;
+  btn.classList.remove("stop");
+
+  if (pending && ((pending === "windows-start" && mode === "homelab") || (pending === "windows-stop" && ["windows", "crashed"].includes(mode)))) {
+    // The request is in flight; the server hasn't reported the new state yet.
+    btn.disabled = true;
+    btn.textContent = pending === "windows-start" ? "Starting Windows…" : "Shutting down Windows…";
+    return;
+  }
+  pending = null;
+
+  if (mode === "homelab") {
+    $("win-state").textContent = "Off";
+    detail.textContent = "Takes the graphics card, 4 cores and 16 GB while it runs.";
+    btn.textContent = "Start Windows";
+  } else if (mode === "starting") {
+    $("win-state").textContent = "Starting";
+    detail.textContent = s.message || "Starting Windows";
+    const i = STEPS.indexOf(s.message);
+    [...steps.children].forEach((el, n) => el.classList.toggle("on", n <= (i < 0 ? 0 : i)));
+    btn.textContent = "Starting Windows…";
+    btn.disabled = true;
+  } else if (mode === "windows") {
+    $("win-state").textContent = "On";
+    const up = s.since ? Date.now() / 1000 - s.since : 0;
+    detail.textContent = s.message || (up >= 60 ? `Running for ${span(up)}. Connect with Parsec.` : "Just started. Connect with Parsec.");
+    btn.textContent = "Shut down Windows";
+    btn.classList.add("stop");
+  } else if (mode === "stopping") {
+    $("win-state").textContent = "Shutting down";
+    detail.textContent = "Windows is closing its apps. Everything comes back here when it's off.";
+    btn.textContent = "Shutting down Windows…";
+    btn.classList.add("stop");
+    btn.disabled = true;
+  } else if (mode === "error") {
+    $("win-state").textContent = "Couldn't finish";
+    detail.textContent = s.message || "Something went wrong.";
+    btn.textContent = "Try starting again";
+  } else if (mode === "crashed") {
+    $("win-state").textContent = "Crashed";
+    detail.textContent = `${s.message || "Windows stopped responding"}. Resetting gives everything back to Linux.`;
+    btn.textContent = "Shut down and reset";
+    btn.classList.add("stop");
+  }
+}
+
+function renderCpu(s) {
+  const winCores = ["windows", "stopping"].includes(s.mode) || (s.mode === "starting" && s.message === "Booting Windows");
+  const threads = s.cpu?.threads || [];
+  document.querySelectorAll(".core").forEach((col, c) => {
+    col.classList.toggle("win", winCores && VM_CORES.includes(c));
+    col.querySelectorAll(".thread").forEach((th, k) => {
+      const v = threads[c + k * 8] ?? 0;
+      th.querySelector(".fill").style.setProperty("--load", `${Math.max(2, v)}%`);
+      th.title = `CPU ${c + k * 8}: ${Math.round(v)}%`;
+    });
+  });
+  $("bracket").classList.toggle("win", winCores);
+  $("bracket").textContent = winCores ? "In use by Windows" : "Used by Windows while it runs";
+  const host = winCores ? [0, 1, 2, 3].flatMap((c) => [threads[c], threads[c + 8]]) : threads;
+  const avg = host.length ? host.reduce((a, b) => a + (b || 0), 0) / host.length : 0;
+  $("cpu-avg").innerHTML = `${Math.round(avg)}<small>%</small>`;
+  $("cpu-temp").innerHTML = `${s.cpu?.temp ?? "–"}<small>°C</small>`;
+  $("cpu-host").textContent = winCores ? "8 of 16" : "16";
+}
+
+function renderMem(m) {
+  if (!m) return;
+  const [used, cache, win] = $("mem-bar").children;
+  used.style.width = `${m.used / m.total * 100}%`;
+  cache.style.width = `${m.cache / m.total * 100}%`;
+  win.style.width = `${m.windows / m.total * 100}%`;
+  const rows = [
+    ["k-used", "Apps", m.used],
+    ["k-cache", "Cache", m.cache],
+    ...(m.windows ? [["k-win", "Windows", m.windows]] : []),
+    [null, "Free", m.free],
+  ];
+  $("mem-legend").innerHTML = rows.map(([k, label, v]) =>
+    `<span>${k ? `<i class="dot ${k}"></i>` : `<i class="dot" style="background:var(--panel-2)"></i>`}${label} <b>${gb(v)} GB</b></span>`).join("")
+    + `<span>of <b>${Math.round(m.total / GiB)} GB</b></span>`;
+}
+
+function renderGpu(g) {
+  const el = $("gpu");
+  if (!g || g.owner === "none") { el.innerHTML = `<p class="none">Not available to Linux right now.</p>`; return; }
+  if (g.owner === "windows") { el.innerHTML = `<p class="away"><b>In use by Windows.</b> It comes back here when Windows shuts down.</p>`; return; }
+  const vram = g.vramTotal ? g.vramUsed / g.vramTotal * 100 : 0;
+  el.innerHTML = `
+    <div class="figs">
+      <div class="fig"><b>${g.busy ?? "–"}<small>%</small></b><span>busy</span></div>
+      <div class="fig"><b>${g.temp ?? "–"}<small>°C</small></b><span>${g.power != null ? `${g.power} W` : "temperature"}</span></div>
+    </div>
+    <div class="vram">
+      <div class="bar"><i class="k-used" style="width:${vram}%"></i></div>
+      <p>${gb(g.vramUsed || 0)} of ${gb(g.vramTotal || 0)} GB video memory</p>
+    </div>`;
+}
+
+function renderNet(n) {
+  if (!n) return;
+  const [r, ru] = rate(n.rx), [t, tu] = rate(n.tx);
+  $("rx").innerHTML = `${r}<small>${ru}</small>`;
+  $("tx").innerHTML = `${t}<small>${tu}</small>`;
+}
+
+const SVC_WORD = { running: "Running", partial: "Partly running", stopped: "Stopped", failed: "Failed" };
+function renderServices(list) {
+  $("svc").innerHTML = (list || []).map((x) =>
+    `<li><span class="name">${esc(x.name)}</span><span class="st" data-s="${esc(x.state)}"><i class="dot"></i>${SVC_WORD[x.state] || esc(x.state)}</span></li>`).join("")
+    || `<li><span class="name">No services found</span></li>`;
+}
+
+function renderDisks(list) {
+  $("disks").innerHTML = (list || []).map((d) => {
+    const pct = d.used / d.total * 100;
+    const name = d.mount === "/" ? "System (NVMe)" : d.mount === "/mnt/data4" ? "Data (4 TB HDD)" : esc(d.mount);
+    return `<div class="disk${pct > 85 ? " full" : ""}">
+      <div class="row"><b>${name}</b><span>${gb(d.total - d.used)} GB free of ${gb(d.total)}</span></div>
+      <div class="bar"><i style="width:${pct}%"></i></div></div>`;
+  }).join("");
+}
+
+function render(s) {
+  last = s;
+  $("host").textContent = s.host?.name || "rishabh-nix";
+  const modeWords = { homelab: "Homelab mode", starting: "Starting Windows", windows: "Windows is on", stopping: "Shutting down Windows", error: "Needs attention", crashed: "Windows crashed" };
+  $("mode-line").textContent = modeWords[s.mode] || s.mode;
+  $("mode-line").classList.remove("offline");
+  $("uptime").textContent = s.host ? `up ${span(s.host.uptime)}` : "";
+  renderWindows(s);
+  renderCpu(s);
+  renderMem(s.mem);
+  renderGpu(s.gpu);
+  renderNet(s.net);
+  renderServices(s.stacks);
+  renderDisks(s.disks);
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    render(await r.json());
+  } catch {
+    $("mode-line").textContent = "Can't reach rishabh-nix";
+    $("mode-line").classList.add("offline");
+  }
+}
+
+async function act(action) {
+  try {
+    const r = await fetch("/api/action", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Homelab": "1" },
+      body: JSON.stringify({ action }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "failed");
+    return true;
+  } catch (e) {
+    pending = null;
+    render({ ...last, mode: "error", message: `The request didn't go through: ${e.message}` });
+    return false;
+  }
+}
+
+$("win-btn").addEventListener("click", () => {
+  const stop = last && ["windows", "stopping", "crashed"].includes(last.mode);
+  pending = stop ? "windows-stop" : "windows-start";
+  renderWindows(last);
+  act(pending).then(poll);
+});
+
+// Power buttons: first tap arms, second tap within 4 s acts.
+document.querySelectorAll(".power").forEach((b) => {
+  const label = b.textContent;
+  let timer;
+  b.addEventListener("click", () => {
+    if (!b.classList.contains("armed")) {
+      document.querySelectorAll(".power.armed").forEach((o) => o.dispatchEvent(new Event("disarm")));
+      b.classList.add("armed");
+      b.textContent = b.dataset.confirm;
+      timer = setTimeout(() => b.dispatchEvent(new Event("disarm")), 4000);
+      return;
+    }
+    clearTimeout(timer);
+    b.textContent = "Sent";
+    act(b.dataset.action);
+  });
+  b.addEventListener("disarm", () => { clearTimeout(timer); b.classList.remove("armed"); b.textContent = label; });
+});
+
+function tick() {
+  const now = new Date();
+  $("clock").firstChild.nodeValue = now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  $("date").textContent = now.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+}
+
+buildMap();
+tick();
+setInterval(tick, 1000);
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

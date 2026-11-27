@@ -24,11 +24,7 @@ let
   # can't drift from what's actually deployed.
   containers = config.virtualisation.oci-containers.containers;
   unit = name: "docker-${name}.service";
-  # A stack is its Tailscale sidecar plus every container in its network.
-  stackUnits = stack: map unit (builtins.filter (name:
-    name == "tailscale-${stack}"
-    || builtins.elem "--network=container:tailscale-${stack}" containers.${name}.extraOptions
-  ) (builtins.attrNames containers));
+  stackUnits = (import ./stacks.nix containers).units;
   samechanImage = (containers.samechan or { image = null; }).image;
   publicImages = lib.remove samechanImage (lib.unique (lib.mapAttrsToList (_: c: c.image) containers));
 in
@@ -39,6 +35,7 @@ in
     ./containers.nix
     ./samba-ntfs.nix
     ./vfio.nix
+    ./homelab.nix
     ./sandbox-podman.nix
   ];
 
@@ -249,36 +246,18 @@ in
   hardware.nvidia-container-toolkit.enable = !recoveryMode;
 
   # ---------------------------------------------------------
-  # Power Sync & ACPI (Host Shutdown triggered by Power Button)
+  # Physical power button: power off the whole machine
   # ---------------------------------------------------------
-  # Intercept the physical power button so logind doesn't immediately kill the host
+  # logind would cut the host immediately. Through acpid it's a normal
+  # poweroff, and stopping win11.service on the way down shuts Windows down
+  # first (see homelab.nix).
   services.logind.settings.Login.HandlePowerKey = "ignore";
-  
+
   services.acpid = lib.mkIf (!recoveryMode) {
     enable = true;
-    handlers = {
-      power = {
-        event = "button/power.*";
-        action = ''
-          CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-          case "$CURRENT_STATE" in
-            "shut off")
-              ${pkgs.systemd}/bin/systemctl poweroff
-              ;;
-            running|blocked)
-              # The lifecycle monitor powers off NixOS only after libvirt
-              # confirms that Windows completed a clean shutdown.
-              ${pkgs.systemd}/bin/systemctl start win11-power-sync-monitor.service || true
-              ${pkgs.libvirt}/bin/virsh shutdown win11
-              ;;
-            "in shutdown")
-              ;;
-            *)
-              echo "Refusing to power off NixOS while win11 is in state '$CURRENT_STATE'." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-button -p warning
-              ;;
-          esac
-        '';
-      };
+    handlers.power = {
+      event = "button/power.*";
+      action = "${pkgs.systemd}/bin/systemctl poweroff";
     };
   };
 
@@ -377,46 +356,6 @@ in
     # System info
     fastfetch
     tree
-    (pkgs.writeShellScriptBin "reboot-to-windows" ''
-      set -eu
-
-      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-      case "$CURRENT_STATE" in
-        running|paused|blocked|pmsuspended|"in shutdown")
-          ;;
-        *)
-          echo "win11 is not active ($CURRENT_STATE); there is no guest shutdown to wait for." >&2
-          exit 1
-          ;;
-      esac
-
-      BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
-        BEGIN { IGNORECASE = 1 }
-        /^Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]/ && /Windows Boot Manager/ {
-          boot = $1
-          gsub(/^Boot/, "", boot)
-          gsub(/\*/, "", boot)
-          print boot
-          exit
-        }
-      ')"
-
-      if [ -z "$BOOTNUM" ]; then
-        echo "Could not find a UEFI entry named Windows Boot Manager." >&2
-        ${pkgs.efibootmgr}/bin/efibootmgr >&2
-        exit 1
-      fi
-
-      ${pkgs.coreutils}/bin/touch /run/win11-boot-baremetal-next
-      echo "Waiting for win11 to shut down normally; the VM and NixOS host were left running."
-      echo "After that clean shutdown, Windows Boot Manager (Boot$BOOTNUM) will be armed for the next host startup."
-
-      if [ -e /run/win11-power-sync.disabled ]; then
-        echo "Warning: power sync is disabled, so shutting down the VM will not power off NixOS." >&2
-      elif ! ${pkgs.systemd}/bin/systemctl is-active --quiet win11-power-sync-monitor.service; then
-        echo "Warning: the power-sync monitor is not active, so verify the host powers off before the next startup." >&2
-      fi
-    '')
     # Runs the same units the weekly timers do (nix.gc + docker autoPrune),
     # so flags/retention stay defined in one place.
     (pkgs.writeShellScriptBin "gc-all" ''
@@ -467,10 +406,6 @@ in
 
   environment.shellAliases = {
     update-containers = "sudo /run/current-system/sw/bin/update-containers";
-    disable-power-sync = "sudo /run/current-system/sw/bin/disable-power-sync";
-    enable-power-sync = "sudo /run/current-system/sw/bin/enable-power-sync";
-    free-win11-ram = "sudo /run/current-system/sw/bin/free-win11-hugepages";
-    reboot-to-windows = "sudo /run/current-system/sw/bin/reboot-to-windows";
     nix-deploy = "cd /etc/nixos/nixconf && sudo git pull --ff-only && sudo nixos-rebuild switch --flake .#rishabh-nix && cd -";
     stop-hokago = "sudo /run/current-system/sw/bin/stop-hokago";
     start-hokago = "sudo /run/current-system/sw/bin/start-hokago";

@@ -3,15 +3,17 @@
   <memory unit='KiB'>16777216</memory>
   <currentMemory unit='KiB'>16777216</currentMemory>
   <memoryBacking>
+    <!-- 2 MiB pages, allocated by win11.service at start and freed at stop
+         (homelab.nix). 1 GiB pages can't be reliably allocated after boot. -->
     <hugepages>
-      <page size='1' unit='G'/>
+      <page size='2' unit='M'/>
     </hugepages>
   </memoryBacking>
   <vcpu placement='static'>8</vcpu>
   <cputune>
-    <!-- All 8 vCPUs pinned exclusively to the isolated CPUs 4-7/12-15
-         (physical cores 4-7 and their SMT siblings). CPUs 0-3/8-11 stay
-         reserved for NixOS and the QEMU emulator threads. -->
+    <!-- All 8 vCPUs pinned to CPUs 4-7/12-15 (physical cores 4-7 and their
+         SMT siblings). While the VM runs, win11.service keeps the host on
+         CPUs 0-3/8-11, which it shares with the QEMU emulator threads. -->
     <vcpupin vcpu='0' cpuset='4'/>
     <vcpupin vcpu='1' cpuset='12'/>
     <vcpupin vcpu='2' cpuset='5'/>
@@ -122,9 +124,10 @@ $HYPERVCLOCK_TIMER
 
     <!-- RX 6700 XT GPU Passthrough -->
     <!-- Mapped to 2f:00.0 -->
-    <!-- This device is bound to vfio-pci during initrd; libvirt must not
-         detach or reattach its host driver during VM lifecycle transitions. -->
-    <hostdev mode='subsystem' type='pci' managed='no'>
+    <!-- amdgpu owns it while Windows is off (homelab dashboard); libvirt
+         detaches it to vfio-pci at VM start and gives it back at stop.
+         win11.service makes sure nothing on the host still holds it. -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
         <address domain='0x0000' bus='0x2f' slot='0x00' function='0x0'/>
       </source>
@@ -135,7 +138,7 @@ $HYPERVCLOCK_TIMER
 
     <!-- RX 6700 XT Audio Passthrough -->
     <!-- Mapped to 2f:00.1 -->
-    <hostdev mode='subsystem' type='pci' managed='no'>
+    <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
         <address domain='0x0000' bus='0x2f' slot='0x00' function='0x1'/>
       </source>

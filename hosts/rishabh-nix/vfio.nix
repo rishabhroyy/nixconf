@@ -2,14 +2,17 @@
 
 let
   cpus = import ./cpu-layout.nix;
-  # Dedicated passthrough devices bind to vfio-pci once during initrd and stay
-  # there for the whole NixOS boot.
+  # The boot NVMe and SATA controller bind to vfio-pci once during initrd and
+  # stay there for the whole NixOS boot. The RX 6700 XT (1002:73df, its HDMI
+  # audio 1002:ab28) is not in this list: it drives the homelab dashboard
+  # while Windows is off, and libvirt hands it to vfio-pci at VM start
+  # (managed='yes' in win11-template.xml, see homelab.nix).
   # 10ec:8125 (the 2.5GbE NIC) intentionally not in this list -- it's
   # host-owned now, bridged as br0, and shared with the win11 guest over a
   # virtio-net interface instead of raw PCI passthrough. See networking
   # config in configuration.nix and the win11 domain's <interface> in
   # win11-template.xml.
-  vfioIds = [ "1002:73df" "1002:ab28" "144d:a80a" "1b21:0612" ];
+  vfioIds = [ "144d:a80a" "1b21:0612" ];
   win11VfioDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
@@ -24,32 +27,20 @@ in
   boot.kernelParams = [
     "amd_iommu=on"
     "iommu=pt"
-    # Isolate the win11 vCPU cores; NixOS and QEMU keep the housekeeping
-    # CPUs (both sets are in cpu-layout.nix).
-    "isolcpus=domain,managed_irq,${cpus.isolated}"
-    "nohz_full=${cpus.isolated}"
-    "rcu_nocbs=${cpus.isolated}"
-    # Keep offloaded RCU callbacks from waking latency-sensitive guest CPUs.
-    "rcu_nocb_poll"
-    "irqaffinity=${cpus.housekeeping}"
-    "workqueue.unbound_cpus=${cpus.housekeeping}"
-    "systemd.cpu_affinity=${cpus.housekeeping}"
+    # No boot-time CPU isolation (isolcpus/nohz_full/rcu_nocbs): homelab.nix
+    # moves the host off the win11 vCPU cores only while Windows runs, so
+    # they're the host's whenever it's off.
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
-    # Default halt_poll_ns (200us) isn't enough headroom for the isolated
-    # cores' bursty HLT pattern under amd-pstate-epp: on nohz_full/isolcpus
-    # cores the guest's frequent short HLTs were dropping straight into the
-    # host's C2 idle state before the vCPU thread's activity read as "busy",
-    # which starved the autonomous boost algorithm and pinned cores 4-7/12-15
-    # at ~1.75GHz (their floor) instead of boosting toward 4.85GHz. A longer
-    # busy-poll window keeps short guest idle gaps from reaching C-states at
-    # all. Costs a bit of idle power on these cores; they're dedicated to the
-    # VM anyway.
+    # Default halt_poll_ns (200us) isn't enough headroom for the guest's
+    # bursty HLT pattern: its frequent short HLTs were dropping straight into
+    # the host's C2 idle state, starving the boost algorithm. A longer
+    # busy-poll window keeps short guest idle gaps out of C-states. Only
+    # vCPU threads poll, so it costs nothing while Windows is off.
     "kvm.halt_poll_ns=500000"
-    "default_hugepagesz=1G"
-    "hugepagesz=1G"
-    "hugepages=16"
+    # No hugepages reserved at boot: homelab.nix allocates the VM's 2 MiB
+    # pages at Windows start and frees them at stop.
     ("vfio-pci.ids=" + builtins.concatStringsSep "," vfioIds)
   ];
 
@@ -65,53 +56,6 @@ in
     "vfio"
     "vfio_iommu_type1"
   ];
-
-  # Even with kvm.halt_poll_ns raised above, disable the C2 idle state
-  # outright on the isolated cores. C2 has an 18us entry latency and a 36us
-  # break-even residency here, so forcing these cores no deeper than C1
-  # (1us latency) keeps every wakeup cheap. Cores 0-3/8-11 keep normal idle
-  # behavior for power savings.
-  systemd.services.disable-win11-core-cstates = {
-    description = "Disable deep C-states on the isolated win11 vCPU cores";
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig.Type = "oneshot";
-    script = ''
-      for CPU in ${cpus.isolatedWords}; do
-        for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
-          NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
-          if [ "$NAME" != "POLL" ] && [ "$NAME" != "C1" ]; then
-            echo 1 > "$STATE/disable"
-          fi
-        done
-      done
-    '';
-  };
-
-  # The actual cause of the isolated cores sitting at their ~1.75GHz P-state
-  # floor even under 90%+ measured vCPU load: amd-pstate-epp's "performance"
-  # governor requests a boosted P-state via a callback that's re-applied on
-  # every scheduler tick. nohz_full on cores 4-7/12-15 (needed for the VM's
-  # latency isolation) stops that tick, so the boost request only gets
-  # applied once at boot -- before the VM has any load -- and is never
-  # refreshed afterward. cpupower/scaling_governor="performance" alone can't
-  # fix this; it depends on the same tick.
-  #
-  # Fix: collapse each isolated core's allowed frequency range to a single
-  # point at its max (scaling_min_freq = scaling_max_freq). That's a static
-  # hardware CPPC request, not a per-tick one, so it survives with no tick to
-  # refresh it. These cores are 100% dedicated to the VM, so there's no
-  # power-saving idle-clock behavior worth preserving here.
-  systemd.services.pin-win11-core-max-freq = {
-    description = "Pin the isolated win11 vCPU cores to their max P-state";
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig.Type = "oneshot";
-    script = ''
-      for CPU in ${cpus.isolatedWords}; do
-        MAX="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_max_freq)"
-        echo "$MAX" > /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_min_freq
-      done
-    '';
-  };
 
   # Virtualization settings
   virtualisation.libvirtd = {
@@ -135,7 +79,7 @@ in
   '';
 
   # Libvirt domain autostart races the generated XML and passthrough-device
-  # readiness. The dedicated start-win11-vm service owns guest startup.
+  # readiness. win11.service (homelab.nix) owns guest startup.
   systemd.services.disable-win11-libvirt-autostart = {
     description = "Disable libvirt-owned Windows 11 autostart";
     before = [ "libvirtd.service" ];
@@ -143,127 +87,6 @@ in
     serviceConfig.Type = "oneshot";
     script = ''
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/autostart/win11.xml
-    '';
-  };
-
-  systemd.services.win11-power-sync-monitor = {
-    description = "Power off NixOS after a clean Windows 11 guest shutdown";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "libvirtd.service" ];
-    requires = [ "libvirtd.service" ];
-    partOf = [ "libvirtd.service" ];
-    serviceConfig = {
-      Type = "simple";
-      Restart = "always";
-      RestartSec = "2s";
-    };
-    script = ''
-      set -uo pipefail
-      export LC_ALL=C
-      REBOOT_MARKER=/run/win11-reboot-requested
-      BAREMETAL_NEXT_MARKER=/run/win11-boot-baremetal-next
-      STARTED_MARKER=/run/win11-started
-
-      set_windows_bootnext() {
-        BOOTNUM="$(${pkgs.efibootmgr}/bin/efibootmgr | ${pkgs.gawk}/bin/awk '
-          BEGIN { IGNORECASE = 1 }
-          /^Boot[0-9A-F][0-9A-F][0-9A-F][0-9A-F]/ && /Windows Boot Manager/ {
-            boot = $1
-            gsub(/^Boot/, "", boot)
-            gsub(/\*/, "", boot)
-            print boot
-            exit
-          }
-        ')"
-
-        if [ -z "$BOOTNUM" ]; then
-          echo "Bare-metal Windows was requested, but no Windows Boot Manager UEFI entry exists; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync -p err
-          return 1
-        fi
-
-        if ${pkgs.efibootmgr}/bin/efibootmgr --bootnext "$BOOTNUM" >/dev/null; then
-          ${pkgs.coreutils}/bin/rm -f "$BAREMETAL_NEXT_MARKER"
-          echo "Armed Windows Boot Manager (Boot$BOOTNUM) for the next host startup." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-          return 0
-        fi
-
-        echo "Failed to arm Windows Boot Manager for the next host startup; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync -p err
-        return 1
-      }
-
-      ${pkgs.coreutils}/bin/stdbuf -oL ${pkgs.libvirt}/bin/virsh event --all --loop --timestamp |
-        while IFS= read -r EVENT; do
-          echo "$EVENT" | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-
-          case "$EVENT" in
-            *"event 'reboot' for domain win11:"*|*"event 'reboot' for domain 'win11':"*)
-              ${pkgs.coreutils}/bin/touch "$REBOOT_MARKER"
-              echo "Windows 11 requested a reboot; suppressing host poweroff for this transition." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-              ;;
-            *"event 'lifecycle' for domain win11: Started Booted"*|*"event 'lifecycle' for domain 'win11': Started Booted"*)
-              ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
-              ${pkgs.coreutils}/bin/touch "$STARTED_MARKER"
-              ;;
-            *"event 'lifecycle' for domain win11: Stopped Shutdown"*|*"event 'lifecycle' for domain 'win11': Stopped Shutdown"*)
-              (
-                # Reboots temporarily pass through Stopped Shutdown. Give
-                # libvirt time to emit the reboot/start events before deciding.
-                ${pkgs.coreutils}/bin/sleep 5
-
-                if [ -e /run/win11-power-sync.disabled ] || \
-                   ${pkgs.gnugrep}/bin/grep -qw 'win11.no_power_sync=1' /proc/cmdline || \
-                   ${pkgs.gnugrep}/bin/grep -qw 'no-win11-power-sync' /proc/cmdline; then
-                  echo "Windows 11 completed a clean guest shutdown; host poweroff is disabled." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                  exit 0
-                fi
-
-                if [ -e "$REBOOT_MARKER" ]; then
-                  NOW="$(${pkgs.coreutils}/bin/date +%s)"
-                  MARKER_TIME="$(${pkgs.coreutils}/bin/stat -c %Y "$REBOOT_MARKER" 2>/dev/null || echo 0)"
-                  MARKER_AGE="$((NOW - MARKER_TIME))"
-                  if [ "$MARKER_AGE" -ge 0 ] && [ "$MARKER_AGE" -le 120 ]; then
-                    echo "Windows 11 stopped as part of a reboot; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                    exit 0
-                  fi
-                  ${pkgs.coreutils}/bin/rm -f "$REBOOT_MARKER"
-                fi
-
-                # A guest that stops within 2 minutes of starting wasn't shut
-                # down deliberately (failed boot, crash, update bounce). Never
-                # take the host down for that; it would look like a broken boot.
-                if [ -e "$STARTED_MARKER" ]; then
-                  NOW="$(${pkgs.coreutils}/bin/date +%s)"
-                  STARTED_TIME="$(${pkgs.coreutils}/bin/stat -c %Y "$STARTED_MARKER" 2>/dev/null || echo 0)"
-                  if [ "$((NOW - STARTED_TIME))" -lt 120 ]; then
-                    echo "Windows 11 stopped within 2 minutes of starting; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                    exit 0
-                  fi
-                fi
-
-                SYSTEM_STATE="$(${pkgs.systemd}/bin/systemctl is-system-running 2>/dev/null || true)"
-                case "$SYSTEM_STATE" in
-                  running|degraded)
-                    ;;
-                  *)
-                    echo "Windows 11 stopped while NixOS state is '$SYSTEM_STATE'; leaving the existing host shutdown/reboot transaction unchanged." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                    exit 0
-                    ;;
-                esac
-
-                CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-                if [ "$CURRENT_STATE" = "shut off" ]; then
-                  if [ -e "$BAREMETAL_NEXT_MARKER" ] && ! set_windows_bootnext; then
-                    exit 0
-                  fi
-                  echo "Windows 11 completed a clean shutdown and remains off; powering off NixOS." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                  ${pkgs.systemd}/bin/systemctl poweroff
-                else
-                  echo "Windows 11 stopped with shutdown reason but current state is '$CURRENT_STATE'; leaving NixOS running." | ${pkgs.systemd}/bin/systemd-cat -t win11-power-sync
-                fi
-              ) &
-              ;;
-          esac
-        done
     '';
   };
 
@@ -504,52 +327,6 @@ EOF
     '';
   };
 
-  systemd.services.start-win11-vm = {
-    description = "Start Windows 11 VFIO VM";
-    wantedBy = [ "multi-user.target" ];
-    wants = [ "win11-power-sync-monitor.service" ];
-    after = [
-      "define-win11-vm.service"
-      "win11-power-sync-monitor.service"
-    ];
-    requires = [ "define-win11-vm.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-    script = ''
-      export LC_ALL=C
-
-      if ${pkgs.gnugrep}/bin/grep -qw 'win11.no_autostart=1' /proc/cmdline || \
-         ${pkgs.gnugrep}/bin/grep -qw 'no-win11-autostart' /proc/cmdline; then
-        echo "win11 autostart disabled by kernel command line."
-        exit 0
-      fi
-
-      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11 2>/dev/null || true)"
-      case "$CURRENT_STATE" in
-        "shut off")
-          ;;
-        running|paused|blocked|crashed|pmsuspended|"in shutdown"|"no state")
-          echo "win11 is already active ($CURRENT_STATE); leaving it unchanged."
-          exit 0
-          ;;
-        *)
-          echo "Could not determine a safe inactive state for win11: $CURRENT_STATE" >&2
-          exit 1
-          ;;
-      esac
-
-      # Dedicated devices are already bound to vfio-pci. Start the persistent
-      # libvirt domain normally and exactly once.
-      echo "Starting win11."
-      if ! ${pkgs.libvirt}/bin/virsh start win11; then
-        ${pkgs.coreutils}/bin/tail -n 80 /var/log/libvirt/qemu/win11.log 2>/dev/null >&2 || true
-        exit 1
-      fi
-    '';
-  };
-
   environment.systemPackages = with pkgs; [
     virt-manager
     libguestfs
@@ -561,17 +338,6 @@ EOF
     tpm2-tools
     python3Packages.virt-firmware
     acpica-tools
-    (pkgs.writeShellScriptBin "disable-power-sync" ''
-      set -eu
-      ${pkgs.coreutils}/bin/touch /run/win11-power-sync.disabled
-      echo "Power sync disabled until the next host boot or enable-power-sync."
-    '')
-    (pkgs.writeShellScriptBin "enable-power-sync" ''
-      set -eu
-      ${pkgs.coreutils}/bin/rm -f /run/win11-power-sync.disabled
-      ${pkgs.systemd}/bin/systemctl start win11-power-sync-monitor.service
-      echo "Power sync enabled."
-    '')
     (pkgs.writeShellScriptBin "reset-win11-vm-definition" ''
       set -eu
       export LC_ALL=C
@@ -653,30 +419,6 @@ EOF
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "Enrolled Secure Boot keys into $NVRAM"
       echo "Start the VM, then check Windows with: Confirm-SecureBootUEFI"
-    '')
-    (pkgs.writeShellScriptBin "free-win11-hugepages" ''
-      set -eu
-      export LC_ALL=C
-
-      CURRENT_STATE="$(${pkgs.libvirt}/bin/virsh domstate win11)"
-      if [ "$CURRENT_STATE" != "shut off" ]; then
-        echo "win11 is not safely shut off ($CURRENT_STATE); refusing to free its hugepages." >&2
-        exit 1
-      fi
-
-      if [ -w /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages ]; then
-        echo 0 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
-      fi
-
-      if [ -w /proc/sys/vm/nr_hugepages ]; then
-        echo 0 > /proc/sys/vm/nr_hugepages
-      fi
-
-      echo "The next win11 start will fail safely until the host is rebooted and its 1G hugepages are reserved again."
-      echo "Hugepages after release:"
-      ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize|MemAvailable' /proc/meminfo
-      echo "1G hugepages:"
-      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
     '')
     (pkgs.writeShellScriptBin "verify-win11-vfio" ''
       set -eu
@@ -763,7 +505,7 @@ EOF
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
 
       echo
-      echo "== CPU boost / idle states (isolated cores) =="
+      echo "== CPU boost / idle states (VM cores) =="
       ${pkgs.coreutils}/bin/printf 'kvm.halt_poll_ns='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm/parameters/halt_poll_ns 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       for CPU in ${cpus.isolatedWords}; do
@@ -786,8 +528,8 @@ EOF
       ${pkgs.systemd}/bin/systemctl show libvirtd.service --property=LimitRTPRIO --value || true
       ${pkgs.coreutils}/bin/printf 'kernel-command-line='
       ${pkgs.coreutils}/bin/cat /proc/cmdline
-      ${pkgs.coreutils}/bin/printf 'rcu-nocb-poll='
-      if ${pkgs.gnugrep}/bin/grep -qw 'rcu_nocb_poll' /proc/cmdline; then ${pkgs.coreutils}/bin/echo enabled; else ${pkgs.coreutils}/bin/echo missing; fi
+      ${pkgs.coreutils}/bin/printf 'host-slice-cpus='
+      ${pkgs.systemd}/bin/systemctl show system.slice --property=AllowedCPUs --value || true
       ${pkgs.coreutils}/bin/printf 'nmi-watchdog='
       ${pkgs.coreutils}/bin/cat /proc/sys/kernel/nmi_watchdog 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
       ${pkgs.coreutils}/bin/printf 'unbound-workqueue-cpumask='
@@ -827,17 +569,9 @@ EOF
 
       echo
       echo "== Lifecycle =="
-      ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service win11-power-sync-monitor.service || true
-      if [ -e /run/win11-power-sync.disabled ]; then
-        echo "power-sync=disabled-for-this-boot"
-      else
-        echo "power-sync=enabled"
-      fi
-      if [ -e /run/win11-boot-baremetal-next ]; then
-        echo "baremetal-next=waiting-for-clean-guest-shutdown"
-      else
-        echo "baremetal-next=not-armed"
-      fi
+      ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service win11.service win11-lifecycle-monitor.service homelab.target || true
+      ${pkgs.coreutils}/bin/printf 'homelab-state='
+      ${pkgs.coreutils}/bin/cat /run/homelab/state.json 2>/dev/null || echo none
       ${pkgs.coreutils}/bin/printf 'domain-state='
       ${pkgs.libvirt}/bin/virsh domstate win11 --reason 2>/dev/null || true
       ${pkgs.coreutils}/bin/printf 'libvirt-autostart='
@@ -845,15 +579,15 @@ EOF
       echo "recent QEMU log:"
       ${pkgs.coreutils}/bin/tail -n 40 /var/log/libvirt/qemu/win11.log 2>/dev/null || true
       echo "startup journal:"
-      ${pkgs.systemd}/bin/journalctl -b --no-pager -n 120 -u define-win11-vm.service -u start-win11-vm.service || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager -n 120 -u define-win11-vm.service -u win11.service -u win11-lifecycle-monitor.service || true
 
       echo
       echo "== Hugepages =="
       ${pkgs.gnugrep}/bin/grep -E 'HugePages_Total|HugePages_Free|HugePages_Rsvd|Hugepagesize' /proc/meminfo
-      ${pkgs.coreutils}/bin/printf 'free-1g-hugepages='
-      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages 2>/dev/null || true
-      ${pkgs.coreutils}/bin/printf 'total-1g-hugepages='
-      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || true
+      ${pkgs.coreutils}/bin/printf 'free-2m-hugepages='
+      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages 2>/dev/null || true
+      ${pkgs.coreutils}/bin/printf 'total-2m-hugepages='
+      ${pkgs.coreutils}/bin/cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages 2>/dev/null || true
     '')
   ];
 

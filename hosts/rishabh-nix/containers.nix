@@ -1,7 +1,6 @@
 { config, pkgs, ... }:
 
 let
-  cpus = import ./cpu-layout.nix;
   # HTTPS for each sidecar: https://<app>.<tailnet>.ts.net -> the app's local port.
   # `tailscale serve` is tailnet-only (public exposure would need Funnel, which is never
   # enabled here). Plain http://<app> keeps going through each stack's Caddy proxy on :80
@@ -70,24 +69,10 @@ in
   virtualisation.oci-containers.backend = "docker";
 
   # Tailscale Sidecars and Services
-  # Keep background services on the housekeeping CPUs while the
-  # latency-sensitive CPU cores remain available to the Windows guest.
-  # Every container runs under one shared slice capped at 400% -- half of
-  # the 8 housekeeping logical CPUs, for ALL containers combined (docker's
-  # --cpus is per-container, so it couldn't do this). Without it a single
-  # library-scan burst (hokago-worker's ffmpeg trickplay sweeps measured at
-  # 1236% across these 8 CPUs) can saturate the same cores QEMU's emulator
-  # thread and passthrough-device IRQs depend on, starving the VM even
-  # though its own isolated cores are untouched.
-  systemd.slices.oci-containers.sliceConfig = {
-    CPUQuota = "400%";
-    AllowedCPUs = cpus.housekeeping;
-  };
-  virtualisation.oci-containers.containers = builtins.mapAttrs (_: container:
-    container // {
-      extraOptions = (container.extraOptions or []) ++ [ "--cgroup-parent=oci-containers.slice" ];
-    }
-  ) {
+  # No CPU or memory caps: with Windows off they get the whole machine, and
+  # while it runs homelab.nix keeps them on the housekeeping CPUs, where the
+  # VM's own threads outrank them (machine.slice's CPUWeight there).
+  virtualisation.oci-containers.containers = {
     # ---------------------------------------------------------
     # Immich
     # ---------------------------------------------------------

@@ -11,9 +11,9 @@ sudo nixos-rebuild switch --flake .#rishabh-nix --cores 14
 ```
 
 This applies changes in place. Automatic upgrades use the same behavior and
-never reboot the host. Kernel, initrd, bootloader, VFIO device-binding,
-hugepage-reservation, and firmware changes require a later reboot before they
-take effect.
+never reboot the host. Kernel, initrd, bootloader, VFIO device-binding, and
+firmware changes require a later reboot before they take effect. A switch
+never restarts `win11.service`, so it never shuts Windows down.
 
 ## Required Secrets
 
@@ -26,141 +26,75 @@ The host must be able to decrypt them through either:
 The VM definition expects motherboard identity and Tailscale secrets to be
 available at activation time.
 
-## Windows VM
+## Homelab Mode and the Windows VM
 
-Useful host-side checks:
+The machine boots into homelab mode: the host owns all 16 CPUs, all RAM, the
+RX 6700 XT, keyboard and mouse, and the monitor shows the dashboard
+(`hosts/rishabh-nix/homelab/`). Windows only runs on request.
 
 ```bash
-sudo systemctl status define-win11-vm.service
-sudo systemctl status start-win11-vm.service
-sudo systemctl status win11-power-sync-monitor.service
-sudo virsh list --all
-sudo verify-win11-vfio
+win on          # or "Start Windows" on the dashboard
+win off         # shuts Windows down via its OpenSSH server
+win status
+win baremetal   # reboot once into bare-metal Windows
+win key         # the host's public key for Windows (see below)
 ```
 
-`verify-win11-vfio` includes the current startup journal, QEMU log tail,
-boot-critical PCI reset methods and link state, hugepage availability, and
-whether any legacy synchronous QEMU hook remains.
+The dashboard is at `http://rishabh-nix` and `https://rishabh-nix.<tailnet>.ts.net`
+on the tailnet only (never the LAN: it can power the machine off). Preview its
+design anywhere with fake data:
 
-The `start-win11-vm.service` unit owns VM autostart. It disables libvirt's
-independent autostart path, waits for the generated VM definition, then starts
-Windows normally exactly once. It never pauses, probes, detaches, resets,
-reboots, destroys, or retries the guest automatically.
+```bash
+python3 hosts/rishabh-nix/homelab/server.py --demo --port 8080
+```
 
-The dedicated GPU, boot NVMe, SATA controller, and NIC bind directly to
-`vfio-pci` during initrd and remain there for the NixOS boot. Their domain XML
-uses `managed='no'`, so libvirt does not detach or reattach host drivers. Only
-the two shared-ID USB controllers use libvirt-managed handoff.
+`win11.service` (homelab.nix) owns the handoff. Starting it stops
+`homelab.target` (the kiosk and any GPU workloads), checks nothing still holds
+the GPU, allocates 16 GiB of 2 MiB hugepages, moves the host onto CPUs
+0-3/8-11, and starts the VM; libvirt detaches the GPU to `vfio-pci`
+(`managed='yes'`). Any failure undoes all of it and shows the reason on the
+dashboard. Stopping it asks Windows to shut down over SSH (the ACPI power
+button only as a fallback), waits up to 4 minutes, never forces it, then gives
+everything back. Shutting Windows down from inside does the same through
+`win11-lifecycle-monitor.service`. A reboot from inside stays in Windows.
 
-The VM's hugepages are reserved once by the kernel command line and remain
-reserved for the host boot. No libvirt hook compacts memory, drops caches,
-allocates pages, or frees pages during VM lifecycle events. This deliberately
-trades reclaiming 16 GiB after VM shutdown for deterministic subsequent starts.
+One-time setup for `win off`: add the output of `win key` to
+`C:\ProgramData\ssh\administrators_authorized_keys` in Windows (the account
+and address are `winSsh` in homelab.nix).
 
-Routine boot never rewrites the VM's persistent OVMF NVRAM. Secure Boot key
-enrollment is an explicit maintenance action through
-`sudo enroll-win11-secureboot-keys`, not part of domain definition or autostart.
+The physical power button, `Restart`, and `Power off` all shut Windows down
+cleanly first: stopping `win11.service` is part of every host shutdown.
 
-The VM has 8 vCPUs in a 4-core / 8-thread topology, pinned one-to-one to the
-isolated CPUs (physical cores 4-7 and their SMT siblings, see
-`hosts/rishabh-nix/cpu-layout.nix`). NixOS and the QEMU emulator thread keep
-the housekeeping CPUs. Only the emulator thread uses low-priority real-time
-round-robin scheduling, so containers on the same CPUs can't delay its VFIO
-interrupt forwarding; the vCPU threads use normal scheduling on their
-dedicated CPUs. `rcu_nocb_poll` prevents offloaded RCU callback processing
-from repeatedly waking the isolated guest CPUs. The host NMI watchdog remains
-enabled for hard-lockup diagnosis.
+A service that needs the GPU while Windows is off joins `homelab.target`; the
+header of `homelab.nix` has the three lines.
 
-The host-only `win11-power-sync-monitor.service` watches libvirt lifecycle
-and reboot events. It powers off NixOS only after libvirt reports the specific
-normal shutdown reason `Stopped Shutdown` and the domain remains off after a
-short guard period. Reboots, crashes, forced stops, failed boots, and stuck
-firmware leave NixOS running. Existing NixOS shutdown or reboot transactions
-are never replaced by a VM-triggered poweroff.
+The boot NVMe and SATA controller still bind to `vfio-pci` in initrd. No
+libvirt hooks are used: the handoff runs from a systemd unit, so it can't
+deadlock libvirtd.
 
-Useful maintenance helpers:
+Useful checks:
+
+```bash
+sudo verify-win11-vfio
+journalctl -u win11 -u win11-lifecycle-monitor
+```
+
+Maintenance helpers:
 
 ```bash
 sudo reset-win11-vm-definition
 sudo reset-win11-secureboot-nvram
 sudo enroll-win11-secureboot-keys
-sudo free-win11-hugepages
-sudo reboot-to-windows
 ```
 
 `reset-win11-secureboot-nvram` replaces the VM's persistent OVMF variables, so
 use it only when firmware variables are broken or intentionally being reset.
 
-After the previous forced resets, allow Windows Automatic Repair to finish or
-boot Windows bare-metal once before returning to VFIO. Do not use `virsh reset`
-as a recovery action; inspect `sudo verify-win11-vfio` and the service journal
-instead.
+Do not use `virsh reset` as a recovery action; inspect `sudo verify-win11-vfio`
+and the service journal instead.
 
-## One-Time Boot Switching
-
-From NixOS, arm the next host startup for the bare-metal Windows boot entry:
-
-```bash
-sudo reboot-to-windows
-```
-
-From Windows, run PowerShell as Administrator from this repo checkout:
-
-```powershell
-.\windows\scripts\reboot-to-nixos.ps1
-```
-
-Both commands use UEFI BootNext/bootsequence, so the change is one-time rather
-than a permanent boot order edit. `reboot-to-windows` records the request but
-does not stop the VM, write BootNext early, or reboot the host. Shut down
-Windows normally when ready. After that clean shutdown, the power-sync monitor
-writes BootNext immediately before powering off NixOS, so an unrelated earlier
-host reboot cannot consume the request. The command warns if power sync is
-disabled or unavailable.
-
-## Power Sync
-
-Power sync is entirely host-side. A clean Windows shutdown powers off NixOS;
-other VM stop reasons leave NixOS running.
-
-```bash
-sudo enable-power-sync
-sudo disable-power-sync
-```
-
-`disable-power-sync` leaves the lifecycle monitor running but prevents it from
-powering off NixOS. It remains effective across service restarts and
-configuration switches until `enable-power-sync` is run or the NixOS host
-boots again.
-
-The physical power button requests a clean guest shutdown and lets the same
-lifecycle monitor power off the host. It never cuts host power merely because
-a timeout expired.
-
-To skip VM autostart for one boot, edit the boot entry and add either:
-
-```text
-win11.no_autostart=1
-```
-
-or:
-
-```text
-no-win11-autostart
-```
-
-To disable power sync for one boot, edit the boot entry and add either kernel
-parameter:
-
-```text
-win11.no_power_sync=1
-```
-
-or:
-
-```text
-no-win11-power-sync
-```
+From Windows, `.\windows\scripts\reboot-to-nixos.ps1` (PowerShell as
+Administrator) arms a one-time UEFI boot back into NixOS.
 
 ## Samba
 

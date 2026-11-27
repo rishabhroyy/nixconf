@@ -11,38 +11,28 @@ Current stable profile for the `win11` libvirt domain.
 - Physical TPM passthrough through `/dev/tpmrm0`.
 - Host DMI and encrypted secrets used for SMBIOS fields.
 - One small synthetic ACPI thermal SSDT.
-- 16 GiB RAM backed by 1 GiB hugepages.
+- 16 GiB RAM backed by 2 MiB hugepages, allocated at VM start and freed at
+  stop by `win11.service` (homelab.nix).
 - 8 vCPUs with host-passthrough CPU, cache passthrough, `topoext`, `invtsc`,
   and a 4-core / 8-thread topology.
-- All 8 vCPUs are pinned to the isolated CPUs 4-7/12-15 (physical cores 4-7
-  plus their SMT siblings); CPUs 0-3/8-11 stay with NixOS and the QEMU
-  emulator threads.
+- All 8 vCPUs are pinned to CPUs 4-7/12-15 (physical cores 4-7 plus their
+  SMT siblings). While the VM runs, `win11.service` moves the host
+  (system/user slices, init, IRQs, unbound workqueues) onto CPUs 0-3/8-11,
+  shared with the QEMU emulator threads; with the VM off the host has all 16.
+  No boot-time isolation (`isolcpus`/`nohz_full`/`rcu_nocbs`).
 - The QEMU emulator thread uses low-priority real-time round-robin
   scheduling (priority 1) so it isn't queued behind containers on the
   housekeeping CPUs; the vCPU threads use normal scheduling on their
   dedicated isolated CPUs.
 - virtio-net uses 4 vhost queues (NetKVM RSS).
-- `kvm.halt_poll_ns=500000` and the C2 idle state disabled on cores 4-7/12-15
-  (`disable-win11-core-cstates.service`) to keep guest wakeups cheap.
-- Isolated cores 4-7/12-15 pinned to their max P-state
-  (`pin-win11-core-max-freq.service`, `scaling_min_freq = scaling_max_freq`).
-  Measured live under actual 90%+ vCPU load: these cores sat locked at their
-  ~1.75GHz floor the whole time, versus 4.2-4.8GHz on cores 0-3 under lighter
-  load, despite the "performance" governor already being set on both. Root
-  cause: amd-pstate-epp's boost request is re-applied on every scheduler
-  tick, and `nohz_full` on the isolated cores (required for the VM's latency
-  isolation) stops that tick -- so the boost request only ever got applied
-  once at boot, before the VM had any load, and was never refreshed. Pinning
-  the allowed frequency range to a single point is a static hardware request
-  that doesn't need a tick to stay in effect. This, not the C-state residency
-  fix above or any of the removed identity spoofing, was the actual cause of
-  persistent VM lagginess -- the dedicated cores were running at roughly a
-  third of their available clock regardless of load. These cores are 100%
-  dedicated to the VM, so there's no idle-clock power saving worth keeping.
-- Offloaded RCU callbacks use polling so they do not repeatedly wake isolated
-  guest CPUs; the host NMI watchdog remains enabled.
-- Normal systemd workloads, interrupts, unbound workqueues, and managed
-  containers prefer the housekeeping CPUs on physical cores 0-3.
+- `kvm.halt_poll_ns=500000`, and the C2 idle state disabled on cores
+  4-7/12-15 only while the VM runs, to keep guest wakeups cheap.
+- No P-state pinning: the earlier `scaling_min_freq = scaling_max_freq`
+  workaround existed only because `nohz_full` stopped the scheduler tick that
+  re-applies amd-pstate-epp's boost request. Without `nohz_full` the normal
+  governor works; check `scaling_cur_freq` in `verify-win11-vfio` under load.
+- `machine.slice` has `CPUWeight=1000`, so the VM's threads (emulator,
+  vhost-net) win over containers on the shared CPUs. No container CPU caps.
 - Hyper-V enlightenments (incl. `avic`, so SynIC doesn't inhibit AVIC) with
   the hypervisor CPUID bit visible -- hiding it made Windows ignore all of
   them. Only works with SVM hidden (below); with SVM exposed, Windows hangs
@@ -76,23 +66,17 @@ Current stable profile for the `win11` libvirt domain.
   two are never live on the network at the same time. WoL
   is enabled host-side (`networking.interfaces.enp41s0.wakeOnLan.enable`)
   since Linux owns the physical device instead of Windows' driver.
-- Deterministic systemd-owned VM startup after the current XML and passthrough
-  bindings are ready; libvirt's independent domain autostart is disabled.
-- Dedicated passthrough devices, including the physical boot NVMe, bind once to
-  `vfio-pci` during initrd and remain bound throughout the NixOS boot.
-- Only the two shared-ID USB controllers use libvirt-managed driver handoff.
-- A single normal QEMU start; no preflight probes, driver handoff for dedicated
-  devices, paused startup delay, or automatic reset.
-- Routine autostart never rewrites persistent OVMF NVRAM.
-- Hugepages remain reserved for the host boot. No synchronous libvirt hook
-  compacts memory, drops caches, or changes hugepage allocation during VM
-  lifecycle events.
-- Host-only libvirt lifecycle and reboot monitoring powers off NixOS only after
-  a normal guest shutdown that leaves the domain off; no Windows-side tooling
-  is required.
-- `reboot-to-windows` defers its one-time UEFI BootNext write until the guest
-  later completes a clean shutdown, immediately before the monitor powers off
-  NixOS.
+- VM starts only on request (`win on`, the dashboard), never at boot; libvirt's
+  own domain autostart stays disabled.
+- The boot NVMe and SATA controller bind to `vfio-pci` during initrd and stay
+  there. The RX 6700 XT, its HDMI audio and the two USB controllers use
+  libvirt-managed handoff (amdgpu/xhci while Windows is off).
+- `win11.service` stops `homelab.target` and refuses to start Windows while any
+  host process still holds the GPU.
+- Routine startup never rewrites persistent OVMF NVRAM.
+- Windows shutting down (from inside, `win off`, or any host shutdown) returns
+  the machine to homelab mode; it no longer powers the host off. `win off`
+  uses Windows' OpenSSH server; the ACPI power button is only a fallback.
 
 ## Not Active
 
@@ -101,8 +85,8 @@ Current stable profile for the `win11` libvirt domain.
 - No CPUID/RDTSC compensation module or helper command.
 - No forced `tsc-frequency=` override.
 - No full host FACP/DSDT table injection.
-- No runtime IRQ or workqueue repinning from the libvirt hook.
-- No runtime hugepage allocation or release from a libvirt hook.
+- No libvirt hooks. Runtime CPU/IRQ/workqueue repinning and hugepage
+  allocation run from `win11.service`, outside libvirtd.
 - No host-initiated automatic guest reset, reboot, destroy, or retry after a
   startup failure. Guest-requested Windows restarts retain normal semantics.
 
@@ -110,7 +94,6 @@ Current stable profile for the `win11` libvirt domain.
 
 ```bash
 sudo verify-win11-vfio
-sudo free-win11-hugepages
 ```
 
 The ignored `qemu-vmcall-patch/` directory is an archive and is not part of the
