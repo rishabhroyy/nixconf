@@ -336,6 +336,8 @@ in
         --kiosk --ozone-platform=wayland --no-first-run --noerrdialogs \
         --disable-infobars --disable-features=Translate --password-store=basic \
         --check-for-update-interval=31536000 \
+        --renderer-process-limit=1 --disable-extensions \
+        --disable-background-networking --disable-component-update \
         http://127.0.0.1/
     '';
   };
