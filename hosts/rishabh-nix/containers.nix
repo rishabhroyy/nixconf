@@ -1,6 +1,7 @@
 { config, pkgs, ... }:
 
 let
+  cpus = import ./cpu-layout.nix;
   # HTTPS for each sidecar: https://<app>.<tailnet>.ts.net -> the app's local port.
   # `tailscale serve` is tailnet-only (public exposure would need Funnel, which is never
   # enabled here). Plain http://<app> keeps going through each stack's Caddy proxy on :80
@@ -80,7 +81,7 @@ in
   # though its own isolated cores are untouched.
   systemd.slices.oci-containers.sliceConfig = {
     CPUQuota = "400%";
-    AllowedCPUs = "0-3,8-11";
+    AllowedCPUs = cpus.housekeeping;
   };
   virtualisation.oci-containers.containers = builtins.mapAttrs (_: container:
     container // {

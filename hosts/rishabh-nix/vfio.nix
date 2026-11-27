@@ -1,6 +1,7 @@
 { config, pkgs, ... }:
 
 let
+  cpus = import ./cpu-layout.nix;
   # Dedicated passthrough devices bind to vfio-pci once during initrd and stay
   # there for the whole NixOS boot.
   # 10ec:8125 (the 2.5GbE NIC) intentionally not in this list -- it's
@@ -23,16 +24,16 @@ in
   boot.kernelParams = [
     "amd_iommu=on"
     "iommu=pt"
-    # Isolate physical cores 4-7 for the Windows 11 VM.
-    # Physical cores 0-3 remain shared for NixOS and QEMU housekeeping.
-    "isolcpus=domain,managed_irq,4-7,12-15"
-    "nohz_full=4-7,12-15"
-    "rcu_nocbs=4-7,12-15"
+    # Isolate the win11 vCPU cores; NixOS and QEMU keep the housekeeping
+    # CPUs (both sets are in cpu-layout.nix).
+    "isolcpus=domain,managed_irq,${cpus.isolated}"
+    "nohz_full=${cpus.isolated}"
+    "rcu_nocbs=${cpus.isolated}"
     # Keep offloaded RCU callbacks from waking latency-sensitive guest CPUs.
     "rcu_nocb_poll"
-    "irqaffinity=0-3,8-11"
-    "workqueue.unbound_cpus=0-3,8-11"
-    "systemd.cpu_affinity=0-3,8-11"
+    "irqaffinity=${cpus.housekeeping}"
+    "workqueue.unbound_cpus=${cpus.housekeeping}"
+    "systemd.cpu_affinity=${cpus.housekeeping}"
     "amd_pstate=active"
     "kvm.ignore_msrs=1"
     "kvm.report_ignored_msrs=0"
@@ -75,7 +76,7 @@ in
     wantedBy = [ "multi-user.target" ];
     serviceConfig.Type = "oneshot";
     script = ''
-      for CPU in 4 5 6 7 12 13 14 15; do
+      for CPU in ${cpus.isolatedWords}; do
         for STATE in /sys/devices/system/cpu/cpu$CPU/cpuidle/state*/; do
           NAME="$(${pkgs.coreutils}/bin/cat "$STATE/name" 2>/dev/null || true)"
           if [ "$NAME" != "POLL" ] && [ "$NAME" != "C1" ]; then
@@ -105,7 +106,7 @@ in
     wantedBy = [ "multi-user.target" ];
     serviceConfig.Type = "oneshot";
     script = ''
-      for CPU in 4 5 6 7 12 13 14 15; do
+      for CPU in ${cpus.isolatedWords}; do
         MAX="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_max_freq)"
         echo "$MAX" > /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_min_freq
       done
@@ -473,6 +474,7 @@ EOF
       # Windows still sees the real CPU and keeps VBS. Required with the
       # hypervisor CPUID bit visible: with SVM exposed too, Windows hangs at
       # boot trying to launch Hyper-V.
+      export HOUSEKEEPING_CPUS="${cpus.housekeeping}"
       export SVM_FEATURE="    <feature policy='disable' name='svm'/>"
       export HYPERVCLOCK_TIMER="    <timer name='hypervclock' present='yes'/>"
 
@@ -487,7 +489,7 @@ EOF
       
       # Resolve the generated identity, firmware, and feature fragments.
       ${pkgs.envsubst}/bin/envsubst \
-        '$UUID $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $OVMF_CODE $OVMF_VARS $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE' \
+        '$UUID $BIOS_VENDOR $BIOS_VERSION $BIOS_DATE $SYSTEM_MANUFACTURER $SYSTEM_PRODUCT $SYSTEM_VERSION $SYSTEM_SERIAL $BASEBOARD_MANUFACTURER $BASEBOARD_PRODUCT $BASEBOARD_VERSION $BASEBOARD_SERIAL $CHASSIS_MANUFACTURER $CHASSIS_VERSION $CHASSIS_SERIAL $CHASSIS_ASSET $CHASSIS_SKU $OVMF_CODE $OVMF_VARS $QEMU_SYSTEM_X86_64 $HYPERV_FEATURES $SVM_FEATURE $HYPERVCLOCK_TIMER $QEMU_COMMANDLINE $HOUSEKEEPING_CPUS' \
         < ${./win11-template.xml} > "$RESOLVED_XML"
 
       if ${pkgs.gnugrep}/bin/grep -q '\$[A-Z_]' "$RESOLVED_XML"; then
@@ -759,7 +761,6 @@ EOF
       echo "== ACPI =="
       echo "acpi-identity=qemu-header-patch"
       echo "acpi-table-injection=fake-thermal-only"
-      echo "legacy-facp-dsdt-injection=removed"
       ${pkgs.coreutils}/bin/ls -l /var/lib/libvirt/qemu/acpi 2>/dev/null || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -A8 'qemu:commandline' || true
 
@@ -767,7 +768,7 @@ EOF
       echo "== CPU boost / idle states (isolated cores) =="
       ${pkgs.coreutils}/bin/printf 'kvm.halt_poll_ns='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm/parameters/halt_poll_ns 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
-      for CPU in 4 5 6 7 12 13 14 15; do
+      for CPU in ${cpus.isolatedWords}; do
         FREQ="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_cur_freq 2>/dev/null || echo unknown)"
         MINFREQ="$(${pkgs.coreutils}/bin/cat /sys/devices/system/cpu/cpu$CPU/cpufreq/scaling_min_freq 2>/dev/null || echo unknown)"
         ${pkgs.coreutils}/bin/printf 'cpu%s scaling_cur_freq=%s scaling_min_freq=%s ' "$CPU" "$FREQ" "$MINFREQ"

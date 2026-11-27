@@ -20,7 +20,7 @@
     <vcpupin vcpu='5' cpuset='14'/>
     <vcpupin vcpu='6' cpuset='7'/>
     <vcpupin vcpu='7' cpuset='15'/>
-    <emulatorpin cpuset='0-3,8-11'/>
+    <emulatorpin cpuset='$HOUSEKEEPING_CPUS'/>
     <!-- Same low-priority RT class as the vCPU threads. Without this the
          emulator thread (which forwards every VFIO interrupt for the
          passthrough GPU/NVMe/SATA/USB devices) is plain SCHED_OTHER and
