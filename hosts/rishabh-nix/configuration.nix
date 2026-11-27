@@ -19,6 +19,18 @@ let
   samechanDockerConfig = pkgs.writeTextDir "config.json" (builtins.toJSON {
     credHelpers."ghcr.io" = "gh-rishabh";
   });
+
+  # Container helper scripts below are generated from containers.nix, so they
+  # can't drift from what's actually deployed.
+  containers = config.virtualisation.oci-containers.containers;
+  unit = name: "docker-${name}.service";
+  # A stack is its Tailscale sidecar plus every container in its network.
+  stackUnits = stack: map unit (builtins.filter (name:
+    name == "tailscale-${stack}"
+    || builtins.elem "--network=container:tailscale-${stack}" containers.${name}.extraOptions
+  ) (builtins.attrNames containers));
+  samechanImage = (containers.samechan or { image = null; }).image;
+  publicImages = lib.remove samechanImage (lib.unique (lib.mapAttrsToList (_: c: c.image) containers));
 in
 {
   imports = [
@@ -423,96 +435,27 @@ in
       set -euo pipefail
 
       echo "Pulling latest images for all stacks..."
-      ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-server:release
-      ${pkgs.docker}/bin/docker pull ghcr.io/immich-app/immich-machine-learning:release-cuda
-      ${pkgs.docker}/bin/docker pull ghcr.io/rishabhroyy/hokago:latest
-      ${pkgs.docker}/bin/docker pull postgres:17-bookworm
-      ${pkgs.docker}/bin/docker pull valkey/valkey:8-bookworm
-      ${pkgs.docker}/bin/docker pull portainer/portainer-ce:latest
-      ${pkgs.docker}/bin/docker pull copyparty/ac:latest
-      ${pkgs.docker}/bin/docker pull caddy:alpine
-      ${pkgs.docker}/bin/docker pull tailscale/tailscale:latest
-      ${pkgs.docker}/bin/docker pull ollama/ollama:latest
-      ${pkgs.docker}/bin/docker pull pgvector/pgvector:pg18
-      ${pkgs.docker}/bin/docker pull ghcr.io/vectorize-io/hindsight-api:1.2.0
-      # private image: pulled with rishabh's gh login (see ghcrHelper)
-      DOCKER_CONFIG=${samechanDockerConfig} PATH=${ghcrHelper}/bin:$PATH \
-        ${pkgs.docker}/bin/docker pull ghcr.io/rishabhroyy/samechan:latest
-
-      echo "Restarting all container stacks to apply updates and refresh sidecars..."
-      
-      # Immich Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-immich.service \
-                                             docker-immich-server.service \
-                                             docker-immich-machine-learning.service \
-                                             docker-immich-redis.service \
-                                             docker-immich-database.service \
-                                             docker-immich-proxy.service
-
-      # Hokago Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-hokago.service \
-                                             docker-hokago-postgres.service \
-                                             docker-hokago-valkey.service \
-                                             docker-hokago.service \
-                                             docker-hokago-worker.service \
-                                             docker-hokago-proxy.service
-
-      # Portainer Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-portainer.service \
-                                             docker-portainer.service \
-                                             docker-portainer-proxy.service
-
-      # Copyparty Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-copyparty.service \
-                                             docker-copyparty.service \
-                                             docker-copyparty-proxy.service
-
-      # Samechan Stack
-      ${pkgs.systemd}/bin/systemctl restart docker-tailscale-samechan.service \
-                                             docker-samechan-ollama.service \
-                                             docker-samechan-hindsight-db.service \
-                                             docker-samechan-hindsight.service \
-                                             docker-samechan.service
-
+      for IMAGE in ${lib.escapeShellArgs publicImages}; do
+        ${pkgs.docker}/bin/docker pull "$IMAGE"
+      done
+      ${lib.optionalString (samechanImage != null) ''
+        # private image: pulled with rishabh's gh login (see ghcrHelper)
+        DOCKER_CONFIG=${samechanDockerConfig} PATH=${ghcrHelper}/bin:$PATH \
+          ${pkgs.docker}/bin/docker pull ${samechanImage}
+      ''}
+      echo "Restarting all containers to apply updates and refresh sidecars..."
+      ${pkgs.systemd}/bin/systemctl restart ${lib.concatStringsSep " " (map unit (builtins.attrNames containers))}
       echo "All containers updated and restarted!"
     '')
-    (pkgs.writeShellScriptBin "stop-hokago" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl stop docker-hokago-proxy.service \
-                                          docker-hokago-worker.service \
-                                          docker-hokago.service \
-                                          docker-hokago-valkey.service \
-                                          docker-hokago-postgres.service \
-                                          docker-tailscale-hokago.service
+  ] ++ lib.concatMap (stack: [
+    # systemd orders the units by their dependsOn, so one call per direction.
+    (pkgs.writeShellScriptBin "stop-${stack}" ''
+      exec ${pkgs.systemd}/bin/systemctl stop ${lib.concatStringsSep " " (stackUnits stack)}
     '')
-    (pkgs.writeShellScriptBin "start-hokago" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl start docker-tailscale-hokago.service \
-                                           docker-hokago-postgres.service \
-                                           docker-hokago-valkey.service \
-                                           docker-hokago.service \
-                                           docker-hokago-worker.service \
-                                           docker-hokago-proxy.service
+    (pkgs.writeShellScriptBin "start-${stack}" ''
+      exec ${pkgs.systemd}/bin/systemctl start ${lib.concatStringsSep " " (stackUnits stack)}
     '')
-    (pkgs.writeShellScriptBin "stop-immich" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl stop docker-immich-proxy.service \
-                                          docker-immich-server.service \
-                                          docker-immich-machine-learning.service \
-                                          docker-immich-redis.service \
-                                          docker-immich-database.service \
-                                          docker-tailscale-immich.service
-    '')
-    (pkgs.writeShellScriptBin "start-immich" ''
-      set -euo pipefail
-      ${pkgs.systemd}/bin/systemctl start docker-tailscale-immich.service \
-                                           docker-immich-database.service \
-                                           docker-immich-redis.service \
-                                           docker-immich-machine-learning.service \
-                                           docker-immich-server.service \
-                                           docker-immich-proxy.service
-    '')
-  ];
+  ]) [ "hokago" "immich" ];
 
   programs.git = {
     enable = true;
