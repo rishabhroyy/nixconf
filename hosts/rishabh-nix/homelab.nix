@@ -27,8 +27,9 @@ let
 
   gpu = "0000:2f:00.0";
   # Windows' OpenSSH, used to shut it down cleanly from outside: its admin
-  # account and the VM's DHCP-reserved address (see win11-template.xml).
-  winSsh = "rishabh@10.0.0.2";
+  # account and its name. Reached over Tailscale (MagicDNS); Windows
+  # Firewall doesn't let SSH in over the LAN.
+  winSsh = "rishabh@rishabh-pc";
   sshKey = "/var/lib/homelab/win11_ed25519";
   # 16 GiB in 2 MiB pages; matches <memory> in win11-template.xml.
   hugepages = 8192;
