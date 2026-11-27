@@ -367,7 +367,10 @@ in
   system.autoUpgrade = {
     enable = lib.mkDefault (!recoveryMode);
     flake = "/etc/nixos/nixconf#rishabh-nix";
-    operation = "switch";
+    # "boot", not "switch": a live switch swaps NVIDIA userspace under the
+    # running kernel module (that broke hokago on 2026-11-22). Upgrades apply
+    # at the next deliberate reboot.
+    operation = "boot";
     allowReboot = false; # Never randomly restart the host
     dates = "04:00";
     randomizedDelaySec = "45min";
