@@ -9,9 +9,9 @@
   </memoryBacking>
   <vcpu placement='static'>8</vcpu>
   <cputune>
-    <!-- All 8 vCPUs pinned exclusively to isolated physical cores 4-7 (host
-         cores 0-3 stay fully reserved for NixOS/QEMU housekeeping, no
-         Windows vcpus share them). -->
+    <!-- All 8 vCPUs pinned exclusively to the isolated CPUs 4-7/12-15
+         (physical cores 4-7 and their SMT siblings). CPUs 0-3/8-11 stay
+         reserved for NixOS and the QEMU emulator threads. -->
     <vcpupin vcpu='0' cpuset='4'/>
     <vcpupin vcpu='1' cpuset='12'/>
     <vcpupin vcpu='2' cpuset='5'/>

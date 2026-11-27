@@ -17,12 +17,6 @@ let
     "0000:2a:00.1"
     "0000:2a:00.3"
   ];
-  win11EarlyBoundDevices = [
-    "0000:2f:00.0"
-    "0000:2f:00.1"
-    "0000:22:00.0"
-    "0000:26:00.0"
-  ];
 in
 {
   # Kernel parameters for IOMMU, VFIO, and CPU Isolation
@@ -61,9 +55,7 @@ in
   powerManagement.cpuFreqGovernor = "performance";
 
   # AVIC as a normal KVM acceleration path. nested=1 is inert while the guest
-  # has SVM hidden (see SVM_FEATURE), but keep it: nested=0 with this VM config
-  # was the only untested difference in the builds that hard-reset the host.
-  # No live KVM ftrace/kprobe modules are loaded.
+  # has SVM hidden (see SVM_FEATURE).
   boot.extraModprobeConfig = "options kvm_amd nested=1 avic=1";
 
   # Load VFIO early so dedicated passthrough devices never bind to host drivers.
@@ -152,19 +144,6 @@ in
       ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/autostart/win11.xml
     '';
   };
-
-  # Hugepages are reserved by the kernel command line. Remove the old
-  # synchronous libvirt hook that redundantly compacted memory, dropped caches,
-  # and freed those pages during domain lifecycle transitions.
-  system.activationScripts.removeLegacyWin11LibvirtHooks.text = ''
-    for HOOK in /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu; do
-      if [ -f "$HOOK" ] \
-         && ${pkgs.gnugrep}/bin/grep -q 'qemu-hook.log' "$HOOK" \
-         && ${pkgs.gnugrep}/bin/grep -q 'hugepages-1048576kB' "$HOOK"; then
-        ${pkgs.coreutils}/bin/rm -f "$HOOK"
-      fi
-    done
-  '';
 
   systemd.services.win11-power-sync-monitor = {
     description = "Power off NixOS after a clean Windows 11 guest shutdown";
@@ -350,15 +329,6 @@ DefinitionBlock ("fake-thermal.aml", "SSDT", 2, "ALASKA", "A M I   ", 0x00000001
 EOF
       ${pkgs.acpica-tools}/bin/iasl -ve -p /var/lib/libvirt/qemu/acpi/fake-thermal /var/lib/libvirt/qemu/acpi/fake-thermal.asl >/dev/null
       chmod 644 /var/lib/libvirt/qemu/acpi/fake-thermal.aml
-
-      # Clean slate: full host FACP/DSDT injection was too invasive for this VM.
-      # Keep only the tiny synthetic thermal SSDT and QEMU's patched ACPI headers.
-      rm -f /var/lib/libvirt/qemu/acpi/FACP.bin
-      rm -f /var/lib/libvirt/qemu/acpi/DSDT.aml
-      rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
-      rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
-      rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
 
       if ${pkgs.libvirt}/bin/virsh dominfo win11 >/dev/null 2>&1; then
         echo "Updating existing win11 VM definition while preserving OVMF NVRAM..."
@@ -611,13 +581,9 @@ EOF
         exit 1
       fi
 
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-acpi-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-facp-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/enable-dsdt-spoofing
-      ${pkgs.coreutils}/bin/rm -f /var/lib/libvirt/qemu/allow-legacy-acpi-spoofing
       ${pkgs.systemd}/bin/systemctl restart define-win11-vm.service
       echo "win11 VM definition reset to the default stable profile."
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure|<hyperv|hypervclock|qemu:commandline|timer name=.tsc.|feature policy=.require. name=.svm.|feature policy=.disable. name=.hypervisor.' || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E 'loader|nvram|secure|<hyperv|hypervclock|qemu:commandline|timer name=.tsc.|feature policy=.disable. name=.svm.' || true
     '')
     (pkgs.writeShellScriptBin "reset-win11-secureboot-nvram" ''
       set -eu
@@ -731,11 +697,6 @@ EOF
         else
           echo "qemu-binary-vmcall-string=missing"
         fi
-        if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'tsc-scaling-patch'; then
-          echo "qemu-forced-tsc-frequency-log=present"
-        else
-          echo "qemu-forced-tsc-frequency-log=absent"
-        fi
         if ${pkgs.binutils}/bin/strings "$XML_QEMU" | ${pkgs.gnugrep}/bin/grep -q 'qemu-acpi-oem-patch=ALASKA,A M I'; then
           echo "qemu-binary-acpi-string=present"
         else
@@ -744,7 +705,6 @@ EOF
       fi
       PID="$(${pkgs.procps}/bin/pgrep -f 'qemu-system-x86_64.*win11' | ${pkgs.coreutils}/bin/head -n1 || true)"
       if [ -n "$PID" ]; then
-        ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o 'tsc-frequency=[^, ]*' || true
         ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o -- '-acpitable file=[^ ]*' || true
         ${pkgs.coreutils}/bin/tr '\000' ' ' < "/proc/$PID/cmdline" | ${pkgs.gnugrep}/bin/grep -o -- '-smbios type=17[^ ]*' || true
       fi
@@ -752,8 +712,7 @@ EOF
       echo
       echo "== TSC =="
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "timer name='tsc'" || true
-      ${pkgs.coreutils}/bin/echo "tsc-frequency=unforced"
-      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep -E 'failed to disable hypercall quirk|tsc-scaling-patch' || true
+      ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep 'failed to disable hypercall quirk' || true
       ${pkgs.systemd}/bin/journalctl -b --no-pager | ${pkgs.gnugrep}/bin/grep 'qemu-acpi-oem-patch=ALASKA,A M I' || true
 
       echo
@@ -779,15 +738,11 @@ EOF
 
       echo
       echo "== CPU / Hypervisor Masking =="
-      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='hypervisor'|feature policy='require' name='svm'|feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
+      ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E "feature policy='disable' name='svm'|hidden state='on'|timer name='tsc'" || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "poll-control state='on'" || true
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep "ioapic driver='kvm'" || true
       ${pkgs.coreutils}/bin/printf 'kvm_amd.avic='
       ${pkgs.coreutils}/bin/cat /sys/module/kvm_amd/parameters/avic 2>/dev/null || ${pkgs.coreutils}/bin/echo unknown
-      ${pkgs.coreutils}/bin/printf 'hyperv-feature-toggle='
-      ${pkgs.coreutils}/bin/echo enabled
-      ${pkgs.coreutils}/bin/printf 'hyperv-profile='
-      ${pkgs.coreutils}/bin/echo maximal
       ${pkgs.coreutils}/bin/printf 'hyperv-enlightenments='
       if ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -q '<hyperv'; then ${pkgs.coreutils}/bin/echo present; else ${pkgs.coreutils}/bin/echo absent; fi
       ${pkgs.libvirt}/bin/virsh dumpxml win11 | ${pkgs.gnugrep}/bin/grep -E '<hyperv|relaxed|vapic|spinlocks|vpindex|runtime|synic|stimer|direct|reset|vendor_id|frequencies|reenlightenment|tlbflush|ipi|avic' || true
@@ -856,8 +811,8 @@ EOF
       done
 
       echo
-      echo "== Boot-critical PCI readiness =="
-      for DEVICE in ${builtins.concatStringsSep " " win11EarlyBoundDevices}; do
+      echo "== Passthrough PCI state =="
+      for DEVICE in ${builtins.concatStringsSep " " win11VfioDevices}; do
         DEVICE_PATH="/sys/bus/pci/devices/$DEVICE"
         ${pkgs.coreutils}/bin/printf '%s reset-method=' "$DEVICE"
         ${pkgs.coreutils}/bin/cat "$DEVICE_PATH/reset_method" 2>/dev/null || ${pkgs.coreutils}/bin/echo unavailable
@@ -874,16 +829,6 @@ EOF
       echo
       echo "== Lifecycle =="
       ${pkgs.systemd}/bin/systemctl --no-pager --full status disable-win11-libvirt-autostart.service define-win11-vm.service start-win11-vm.service win11-power-sync-monitor.service || true
-      LEGACY_HOOKS=0
-      for HOOK in /etc/libvirt/hooks/qemu /var/lib/libvirt/hooks/qemu; do
-        if [ -e "$HOOK" ]; then
-          echo "legacy-qemu-hook-present=$HOOK"
-          LEGACY_HOOKS=1
-        fi
-      done
-      if [ "$LEGACY_HOOKS" -eq 0 ]; then
-        echo "legacy-qemu-hooks=absent"
-      fi
       if [ -e /run/win11-power-sync.disabled ]; then
         echo "power-sync=disabled-for-this-boot"
       else
