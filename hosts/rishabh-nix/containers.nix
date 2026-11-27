@@ -122,7 +122,6 @@ in
         "--network=container:tailscale-immich"
         "--shm-size=128mb"
       ];
-      labels = { "com.centurylinklabs.watchtower.enable" = "false"; };
       environmentFiles = [ config.sops.templates."immich.env".path ];
       environment = {
         POSTGRES_INITDB_ARGS = "--data-checksums";
@@ -192,14 +191,8 @@ in
       extraOptions = [
         "--network=container:tailscale-hokago"
       ];
-      volumes = [
-        "/var/lib/hokago/cache/valkey:/data"
-      ];
-      # BullMQ queue is ephemeral — no RDB/AOF persistence needed.
-      # Default "save 3600 1" + "stop-writes-on-bgsave-error yes" forks
-      # BGSAVE to /data/dump.rdb; with wrong host perms that MISCONFs and
-      # blocks all writes (bull:artwork/metadata). Disable persistence and
-      # ensure writes are never blocked even if a future BGSAVE fails.
+      # The BullMQ queue is ephemeral: no RDB/AOF persistence, so no host
+      # volume, and writes are never blocked by a failed background save.
       cmd = [
         "--save"
         ""

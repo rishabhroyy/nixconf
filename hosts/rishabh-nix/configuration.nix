@@ -78,7 +78,6 @@ in
   # so that's what's actually relied on here instead of the declarative
   # option.
   networking.useDHCP = false;
-  networking.interfaces.enp39s0.useDHCP = false;
   systemd.services.set-enp41s0-mac = {
     description = "Override enp41s0's MAC so win11's virtio-net can use the real one";
     before = [ "network-addresses-br0.service" "network-link-enp41s0.service" ];
@@ -133,7 +132,7 @@ in
     isNormalUser = true;
     description = "Rishabh";
     hashedPasswordFile = config.sops.secrets.user_password.path;
-    extraGroups = [ "networkmanager" "wheel" "docker" "libvirtd" "kvm" ];
+    extraGroups = [ "wheel" "docker" "libvirtd" "kvm" ];
     openssh.authorizedKeys.keyFiles = [
       ./keys/mac.pub
       ./keys/windows.pub
@@ -300,17 +299,6 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/hokago/config 0755 root root -"
     "d /var/lib/hokago/db 0755 root root -"
-    # valkey/valkey:8-bookworm runs as 999:valkey and BGSAVEs to /data/dump.rdb
-    # (bind-mounted from /var/lib/hokago/cache/valkey). root:root 0755 causes
-    # "Failed opening temp-1702.rdb: Permission denied" + MISCONF stop-writes
-    # that blocks BullMQ (bull:artwork/metadata). Queue is ephemeral — no
-    # persistence needed — but fix perms anyway and disable RDB below.
-    "d /var/lib/hokago/cache/valkey 0750 999 999 -"
-    "Z /var/lib/hokago/cache/valkey 0750 999 999 -"
-    "d /var/lib/tailscale-immich 0755 root root -"
-    "d /var/lib/tailscale-hokago 0755 root root -"
-    "d /var/lib/tailscale-portainer 0755 root root -"
-    "d /var/lib/tailscale-copyparty 0755 root root -"
     "d /var/lib/immich 0755 1000 1000 -"
     "d /var/lib/copyparty 0755 1000 100 -"
   ];
@@ -339,17 +327,6 @@ in
   systemd.services.docker-samechan = lib.mkIf (!recoveryMode) {
     path = [ ghcrHelper ];
     environment.DOCKER_CONFIG = "${samechanDockerConfig}";
-  };
-
-  # Valkey runs as 999:valkey. tmpfiles Z fixes perms on boot, but a
-  # nixos-rebuild that only recreates the dir as root:root (fresh cache)
-  # needs an immediate chown before the container starts, otherwise the
-  # first BGSAVE fails and stop-writes-on-bgsave-error=y blocks BullMQ.
-  systemd.services.docker-hokago-valkey = lib.mkIf (!recoveryMode) {
-    serviceConfig.ExecStartPre = [
-      "-${pkgs.coreutils}/bin/chown 999:999 /var/lib/hokago/cache/valkey"
-      "-${pkgs.coreutils}/bin/chmod 0750 /var/lib/hokago/cache/valkey"
-    ];
   };
 
   # ---------------------------------------------------------
