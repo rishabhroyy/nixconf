@@ -374,8 +374,13 @@ in
   # autovt range, so nothing else claims it). Logging out (`exit`) ends the
   # unit and puts the kiosk back on screen. The button restarts it, so a
   # session left behind is replaced, never resumed.
+  # The kiosk is stopped while the shell runs and started fresh after:
+  # resuming cage across a VT switch crashed Chromium and re-lit every
+  # monitor.
   systemd.services.homelab-shell = {
     description = "Local login on the kiosk monitor";
+    conflicts = [ "cage-tty1.service" ];
+    after = [ "cage-tty1.service" ];
     unitConfig.ConditionPathExists = "!${windowsMarker}";
     # A rebuild must not kick you out of a running shell.
     restartIfChanged = false;
@@ -383,7 +388,10 @@ in
     serviceConfig = {
       ExecStartPre = "${pkgs.kbd}/bin/chvt 9";
       ExecStart = "${pkgs.util-linux}/bin/agetty --noclear --login-program ${config.services.getty.loginProgram} - linux";
-      ExecStopPost = "${pkgs.kbd}/bin/chvt 1";
+      ExecStopPost = [
+        "-${pkgs.kbd}/bin/chvt 1"
+        "-${pkgs.systemd}/bin/systemctl start --no-block cage-tty1.service"
+      ];
       StandardInput = "tty";
       StandardOutput = "tty";
       TTYPath = "/dev/tty9";
