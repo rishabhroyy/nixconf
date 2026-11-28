@@ -32,6 +32,7 @@ ACTIONS = {
     "reboot": ["systemctl", "start", "--no-block", "--job-mode=replace-irreversibly", "reboot.target"],
     "poweroff": ["systemctl", "start", "--no-block", "--job-mode=replace-irreversibly", "poweroff.target"],
     "baremetal": ["systemctl", "start", "--no-block", "homelab-baremetal.service"],
+    "shell": ["systemctl", "restart", "--no-block", "homelab-shell.service"],
     "display-next": None,  # handled here: picks the kiosk's monitor
 }
 

@@ -198,8 +198,8 @@
     transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
   }
   .power:hover { color: var(--text); border-color: var(--line); }
+  .tools { margin-right: auto; display: flex; gap: 0.6rem; flex-wrap: wrap; }
   .screen {
-    margin-right: auto;
     background: transparent;
     border: 1px solid var(--line);
     border-radius: 0.65rem;
@@ -227,7 +227,8 @@
     .thread { height: 3.4rem; border-radius: 0.4rem; }
     footer { justify-content: stretch; }
     .power { flex: 1; border-color: var(--line); }
-    .screen { flex-basis: 100%; margin-right: 0; }
+    .tools { flex-basis: 100%; margin-right: 0; }
+    .screen { flex: 1; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; }
@@ -294,7 +295,10 @@
   </main>
 
   <footer>
-    <button class="screen" id="screen" type="button" hidden>Move to other screen</button>
+    <div class="tools">
+      <button class="screen" id="shell" type="button" title="Type exit to come back here" hidden>Local shell</button>
+      <button class="screen" id="screen" type="button" hidden>Move to other screen</button>
+    </div>
     <button class="power" data-action="baremetal" data-confirm="Tap again to boot Windows directly" title="Restart the computer into Windows itself, without Linux" type="button">Boot Windows directly</button>
     <button class="power" data-action="reboot" data-confirm="Tap again to restart" type="button">Restart</button>
     <button class="power" data-action="poweroff" data-confirm="Tap again to power off" type="button">Power off</button>
@@ -516,6 +520,10 @@ $("win-btn").addEventListener("click", () => {
 });
 
 $("screen").addEventListener("click", () => act("display-next").then(poll));
+
+// Only on the kiosk itself: it switches the monitor this page is on.
+$("shell").hidden = location.hostname !== "127.0.0.1";
+$("shell").addEventListener("click", () => act("shell"));
 
 // Power buttons: first tap arms, second tap within 4 s acts.
 document.querySelectorAll(".power").forEach((b) => {

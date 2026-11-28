@@ -369,6 +369,33 @@ in
         http://127.0.0.1/
     '';
   };
+
+  # The kiosk's "Local shell" button: a login on tty9 (outside logind's
+  # autovt range, so nothing else claims it). Logging out (`exit`) ends the
+  # unit and puts the kiosk back on screen. The button restarts it, so a
+  # session left behind is replaced, never resumed.
+  systemd.services.homelab-shell = {
+    description = "Local login on the kiosk monitor";
+    unitConfig.ConditionPathExists = "!${windowsMarker}";
+    # A rebuild must not kick you out of a running shell.
+    restartIfChanged = false;
+    environment.TERM = "linux";
+    serviceConfig = {
+      ExecStartPre = "${pkgs.kbd}/bin/chvt 9";
+      ExecStart = "${pkgs.util-linux}/bin/agetty --noclear --login-program ${config.services.getty.loginProgram} - linux";
+      ExecStopPost = "${pkgs.kbd}/bin/chvt 1";
+      StandardInput = "tty";
+      StandardOutput = "tty";
+      TTYPath = "/dev/tty9";
+      TTYReset = true;
+      TTYVHangup = true;
+      TTYVTDisallocate = true;
+      UtmpIdentifier = "tty9";
+      IgnoreSIGPIPE = false;
+      SendSIGHUP = true;
+    };
+  };
+
   systemd.services.cage-tty1 = {
     wantedBy = [ "homelab.target" ];
     partOf = [ "homelab.target" ];
@@ -419,13 +446,15 @@ in
     };
   };
 
-  # The dashboard user may start/stop Windows and reboot/power off, nothing else.
+  # The dashboard user may start/stop Windows, reboot/power off and switch the
+  # monitor to a login prompt, nothing else.
   security.polkit.enable = true;
   security.polkit.extraConfig = ''
     polkit.addRule(function (action, subject) {
       if (action.id != "org.freedesktop.systemd1.manage-units" || subject.user != "homelab") return;
       var unit = action.lookup("unit"), verb = action.lookup("verb");
       if (unit == "win11.service" && (verb == "start" || verb == "stop")) return polkit.Result.YES;
+      if (unit == "homelab-shell.service" && verb == "restart") return polkit.Result.YES;
       if ((unit == "reboot.target" || unit == "poweroff.target" || unit == "homelab-baremetal.service") && verb == "start")
         return polkit.Result.YES;
     });
