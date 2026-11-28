@@ -95,6 +95,11 @@ in
       };
       volumes = [
         "/home/rishabh/immich/photos:/usr/src/app/upload"
+        # Regenerable output lives on the SATA SSD; originals, backups and
+        # the database stay on the NVMe. Same container paths, so the paths
+        # stored in Immich's database don't change.
+        "/mnt/ssd/immich/thumbs:/usr/src/app/upload/thumbs"
+        "/mnt/ssd/immich/encoded-video:/usr/src/app/upload/encoded-video"
         "/mnt/data4/Photos/Photos/iPhone_Photos:/usr/src/app/external/iphone_photoprism_backup:ro"
         "/mnt/data4/Photos/cameras:/usr/src/app/external/camera_ssd:ro"
       ];
@@ -112,7 +117,7 @@ in
       # format -- faster, less VRAM, no re-run of jobs needed.
       environment.MACHINE_LEARNING_MODEL_REVISION = "v2";
       volumes = [
-        "/var/lib/immich/model-cache:/cache"
+        "/mnt/ssd/immich/model-cache:/cache"
       ];
     };
 

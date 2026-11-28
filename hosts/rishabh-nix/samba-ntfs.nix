@@ -74,23 +74,17 @@
     };
   };
 
-  # Everything that uses /mnt/data4 (and, for Samba/copyparty, /mnt/ssd)
-  # waits for it and stays down if it can't mount, so nothing serves or
-  # writes into an empty mountpoint on the root disk instead.
-  systemd.services = lib.genAttrs [
-    "samba-smbd"
-    "docker-copyparty"
-    "docker-immich-server"
-    "docker-hokago"
-    "docker-hokago-worker"
-  ] (name:
-    let
-      mounts = [ "mnt-data4.mount" ]
-        ++ lib.optional (lib.elem name [ "samba-smbd" "docker-copyparty" ]) "mnt-ssd.mount";
-    in {
-      after = mounts;
-      requires = mounts;
-    });
+  # Everything that uses /mnt/data4 or /mnt/ssd waits for it and stays down if
+  # it can't mount, so nothing serves or writes into an empty mountpoint on
+  # the root disk instead.
+  systemd.services = lib.mapAttrs (_: mounts: { after = mounts; requires = mounts; }) {
+    samba-smbd = [ "mnt-data4.mount" "mnt-ssd.mount" ];
+    docker-copyparty = [ "mnt-data4.mount" "mnt-ssd.mount" ];
+    docker-immich-server = [ "mnt-data4.mount" "mnt-ssd.mount" ];
+    docker-immich-machine-learning = [ "mnt-ssd.mount" ];
+    docker-hokago = [ "mnt-data4.mount" ];
+    docker-hokago-worker = [ "mnt-data4.mount" ];
+  };
 
   # Samba requires a user password to be set up manually using `smbpasswd -a rishabh`
 }
