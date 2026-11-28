@@ -2,7 +2,7 @@
 
 let
   cpus = import ./cpu-layout.nix;
-  # The boot NVMe and SATA controller bind to vfio-pci once during initrd and
+  # The boot NVMe binds to vfio-pci once during initrd and
   # stay there for the whole NixOS boot. The RX 6700 XT (1002:73df, its HDMI
   # audio 1002:ab28) is not in this list: it drives the homelab dashboard
   # while Windows is off, and libvirt hands it to vfio-pci at VM start
@@ -12,12 +12,13 @@ let
   # virtio-net interface instead of raw PCI passthrough. See networking
   # config in configuration.nix and the win11 domain's <interface> in
   # win11-template.xml.
-  vfioIds = [ "144d:a80a" "1b21:0612" ];
+  # The ASMedia SATA controller (1b21:0612, 26:00.0) is host-owned: its
+  # SanDisk SSD is Linux's /mnt/ssd, shared to Windows over Samba.
+  vfioIds = [ "144d:a80a" ];
   win11VfioDevices = [
     "0000:2f:00.0"
     "0000:2f:00.1"
     "0000:22:00.0"
-    "0000:26:00.0"
     "0000:2a:00.1"
     "0000:2a:00.3"
   ];

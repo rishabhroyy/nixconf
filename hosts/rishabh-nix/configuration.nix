@@ -209,8 +209,8 @@ in
     HOKAGO_ACQUIRE_KEY=${config.sops.placeholder.hokago_acquire_key}
   '';
 
-  # The volume is all of /mnt/data4 (backups, keys, finances), so there's no
-  # anonymous read: every tailnet device would otherwise see all of it.
+  # The volumes are all of /mnt/data4 (backups, keys, finances) and /mnt/ssd,
+  # so there's no anonymous read: every tailnet device would otherwise see it.
   sops.templates."copyparty.conf" = {
     owner = "rishabh";
     mode = "0400";
@@ -223,8 +223,16 @@ in
       [accounts]
         rishabh: ${config.sops.placeholder.copyparty_password}
 
-      [/]
+      # Nothing at /: copyparty lists the volumes (hdd, ssd) there instead.
+      [/hdd]
         /w
+        accs:
+          rwmda: rishabh
+        flags:
+          grid
+
+      [/ssd]
+        /s
         accs:
           rwmda: rishabh
         flags:
@@ -279,10 +287,6 @@ in
   # Windows 11 SSD Protections (Defense-in-Depth)
   # ---------------------------------------------------------
   services.udev.extraRules = ''
-    # Hide the 1TB SATA SSD (Game Drive) from Linux so it is strictly for the Windows VM
-    # The ID ata-SanDisk_SSD_PLUS_1000GB_221306A0095A is used in the QEMU XML.
-    KERNEL=="sd*", SUBSYSTEM=="block", ENV{ID_SERIAL}=="*SanDisk_SSD_PLUS_1000GB_221306A0095A*", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
-
     # Fallback protection if the dedicated NVMe ever fails to bind to vfio-pci.
     KERNEL=="nvme*", SUBSYSTEM=="block", ATTRS{model}=="Samsung SSD 980 PRO 1TB", ENV{UDISKS_IGNORE}="1", OWNER="qemu", GROUP="qemu", MODE="0600"
 

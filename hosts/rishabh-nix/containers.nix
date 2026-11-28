@@ -266,6 +266,7 @@ in
       };
       volumes = [
         "/mnt/data4:/w"
+        "/mnt/ssd:/s"
         "/var/lib/copyparty:/cfg"
         "${config.sops.templates."copyparty.conf".path}:/copyparty.conf:ro"
       ];

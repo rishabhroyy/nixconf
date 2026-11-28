@@ -68,7 +68,7 @@ cleanly first: stopping `win11.service` is part of every host shutdown.
 A service that needs the GPU while Windows is off joins `homelab.target`; the
 header of `homelab.nix` has the three lines.
 
-The boot NVMe and SATA controller still bind to `vfio-pci` in initrd. No
+The boot NVMe still binds to `vfio-pci` in initrd. No
 libvirt hooks are used: the handoff runs from a systemd unit, so it can't
 deadlock libvirtd.
 

@@ -24,7 +24,7 @@
     <vcpupin vcpu='7' cpuset='15'/>
     <emulatorpin cpuset='$HOUSEKEEPING_CPUS'/>
     <!-- Low-priority RT for the emulator thread only. It forwards every VFIO
-         interrupt for the passthrough GPU/NVMe/SATA/USB devices and shares the
+         interrupt for the passthrough GPU/NVMe/USB devices and shares the
          housekeeping cores with Docker, so as plain SCHED_OTHER it would queue
          behind e.g. hokago-worker's ffmpeg sweeps. The vCPU threads stay
          SCHED_OTHER: each already has an isolated CPU to itself, so RT can't
@@ -154,17 +154,6 @@ $HYPERVCLOCK_TIMER
       </source>
       <address type='pci' domain='0x0000' bus='0x03' slot='0x00' function='0x0'/>
       <boot order='1'/>
-    </hostdev>
-
-    <!-- Physical SATA Controller Passthrough (ASMedia 1061/1062) -->
-    <!-- This gives Windows 11 NATIVE access to the 1TB SanDisk SSD with no QEMU branding -->
-    <!-- Mapped to 26:00.0 -->
-    <hostdev mode='subsystem' type='pci' managed='no'>
-      <source>
-        <address domain='0x0000' bus='0x26' slot='0x00' function='0x0'/>
-      </source>
-      <!-- Map to a PCIe root port in the VM (bus 08) -->
-      <address type='pci' domain='0x0000' bus='0x08' slot='0x00' function='0x0'/>
     </hostdev>
 
     <!-- USB Controller 1 Passthrough (Bus 001 - Peripherals) -->

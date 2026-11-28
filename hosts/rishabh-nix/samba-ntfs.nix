@@ -18,7 +18,16 @@
     ];
   };
 
-  # Samba share for the LAN (10.0.0.0/24), which includes the win11 VM on br0.
+  # 1TB SanDisk SATA SSD (host-owned ASMedia controller): Immich data, AI
+  # models, and Windows game installs over the Samba share below.
+  fileSystems."/mnt/ssd" = {
+    device = "/dev/disk/by-label/ssd";
+    fsType = "ext4";
+    options = [ "noatime" "nofail" ];
+  };
+
+  # Samba is only for the win11 VM (10.0.0.2, its DHCP reservation) and the
+  # host itself; other LAN and tailnet devices use copyparty instead.
   services.samba = {
     enable = true;
     openFirewall = true;
@@ -28,7 +37,7 @@
         "server string" = "rishabh-nix Samba";
         "netbios name" = "rishabh-nix";
         "security" = "user";
-        "hosts allow" = "10.0.0. 127.";
+        "hosts allow" = "10.0.0.2 127.";
 
         # --- High Performance HDD / Gaming Optimizations ---
         "server multi channel support" = "yes";
@@ -52,22 +61,36 @@
         "directory mask" = "0755";
         "valid users" = "rishabh";
       };
+
+      "ssd" = {
+        "path" = "/mnt/ssd";
+        "browseable" = "yes";
+        "read only" = "no";
+        "guest ok" = "no";
+        "create mask" = "0644";
+        "directory mask" = "0755";
+        "valid users" = "rishabh";
+      };
     };
   };
 
-  # Everything that uses /mnt/data4 waits for it and stays down if it can't
-  # mount, so nothing serves or writes into the empty mountpoint on the root
-  # disk instead.
+  # Everything that uses /mnt/data4 (and, for Samba/copyparty, /mnt/ssd)
+  # waits for it and stays down if it can't mount, so nothing serves or
+  # writes into an empty mountpoint on the root disk instead.
   systemd.services = lib.genAttrs [
     "samba-smbd"
     "docker-copyparty"
     "docker-immich-server"
     "docker-hokago"
     "docker-hokago-worker"
-  ] (_: {
-    after = [ "mnt-data4.mount" ];
-    requires = [ "mnt-data4.mount" ];
-  });
+  ] (name:
+    let
+      mounts = [ "mnt-data4.mount" ]
+        ++ lib.optional (lib.elem name [ "samba-smbd" "docker-copyparty" ]) "mnt-ssd.mount";
+    in {
+      after = mounts;
+      requires = mounts;
+    });
 
   # Samba requires a user password to be set up manually using `smbpasswd -a rishabh`
 }

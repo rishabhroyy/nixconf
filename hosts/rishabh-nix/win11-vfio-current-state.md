@@ -68,7 +68,7 @@ Current stable profile for the `win11` libvirt domain.
   since Linux owns the physical device instead of Windows' driver.
 - VM starts only on request (`win on`, the dashboard), never at boot; libvirt's
   own domain autostart stays disabled.
-- The boot NVMe and SATA controller bind to `vfio-pci` during initrd and stay
+- The boot NVMe binds to `vfio-pci` during initrd and stays
   there. The RX 6700 XT, its HDMI audio and the two USB controllers use
   libvirt-managed handoff (amdgpu/xhci while Windows is off).
 - `win11.service` stops `homelab.target` and refuses to start Windows while any
