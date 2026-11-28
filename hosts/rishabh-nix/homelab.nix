@@ -435,7 +435,7 @@ in
         pkgs.writeText "homelab.json" (builtins.toJSON {
           inherit gpu;
           vmCpus = cpus.isolatedList;
-          disks = [ "/" "/mnt/data4" ];
+          disks = [ "/" "/mnt/data4" "/mnt/ssd" ];
           stacks = lib.genAttrs stacks.names stacks.units;
         })
       }";

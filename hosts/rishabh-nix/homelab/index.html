@@ -459,7 +459,7 @@ function renderServices(list) {
 function renderDisks(list) {
   $("disks").innerHTML = (list || []).map((d) => {
     const pct = d.used / d.total * 100;
-    const name = d.mount === "/" ? "System (NVMe)" : d.mount === "/mnt/data4" ? "Data (4 TB HDD)" : esc(d.mount);
+    const name = d.mount === "/" ? "System (NVMe)" : d.mount === "/mnt/data4" ? "Data (4 TB HDD)" : d.mount === "/mnt/ssd" ? "SSD (1 TB SATA)" : esc(d.mount);
     return `<div class="disk${pct > 85 ? " full" : ""}">
       <div class="row"><b>${name}</b><span>${gb(d.total - d.used)} GB free of ${gb(d.total)}</span></div>
       <div class="bar"><i style="width:${pct}%"></i></div></div>`;

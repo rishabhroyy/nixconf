@@ -206,6 +206,10 @@ class Host:
     def disks(self):
         out = []
         for mount in self.config["disks"]:
+            # An unmounted /mnt/ssd is just a folder on the root disk; statvfs
+            # would report the root disk's numbers under the wrong name.
+            if not os.path.ismount(mount):
+                continue
             try:
                 st = os.statvfs(mount)
             except OSError:
@@ -301,7 +305,8 @@ class Demo:
                 "vramUsed": int(0.42 * gib), "vramTotal": 12 * gib, "temp": 41, "power": 9},
             "net": {"rx": abs(1.8e6 * math.sin(t / 6)) + 2e4, "tx": abs(4e5 * math.sin(t / 9)) + 1e4},
             "disks": [{"mount": "/", "total": 931 * gib, "used": 402 * gib},
-                      {"mount": "/mnt/data4", "total": 3726 * gib, "used": 3120 * gib}],
+                      {"mount": "/mnt/data4", "total": 3726 * gib, "used": 3120 * gib},
+                      {"mount": "/mnt/ssd", "total": 916 * gib, "used": 210 * gib}],
             "display": {"outputs": ["DP-1", "HDMI-A-1"], "current": self.screen},
             "stacks": [{"name": n, "state": "partial" if n == "hokago" and int(t / 20) % 3 == 2 else "running"}
                        for n in self.STACKS],
